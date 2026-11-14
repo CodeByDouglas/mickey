@@ -365,6 +365,19 @@ mod tests {
         assert!(verified(&sums, &signature, &key, "0.3.5", name, file).is_err());
     }
 
+    /// The hash `verified` computes must be the one `sha256sum` writes into
+    /// SHA256SUMS (release.yml). The test above hashes with the same crate on
+    /// both sides, so it would pass even if `sha2` changed its output; this
+    /// pins it to the published SHA-256 test vector for "abc" (FIPS 180-2).
+    #[test]
+    fn the_hash_is_the_one_sha256sum_writes() {
+        use sha2::{Digest, Sha256};
+        assert_eq!(
+            crate::hex::encode(&Sha256::digest(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
     #[test]
     fn the_release_key_is_read_from_its_file() {
         assert_eq!(release_key("# not made yet\n"), None);
