@@ -69,11 +69,17 @@ pub(super) fn serve_clipboard(
                 match transport::accept_data(stream, &identity, is_trusted) {
                     Ok(link) => {
                         let by = *link.peer_key();
-                        if let Ok(handle) = link.try_clone()
-                            && let Some((_, older)) =
-                                newest.lock_anyway().insert(by, (this, handle))
-                        {
-                            let _ = older.shutdown();
+                        if let Ok(handle) = link.try_clone() {
+                            let mut map = newest.lock_anyway();
+                            // Two links of one PC may finish their handshakes
+                            // out of order: the older one gives way, never
+                            // the newer.
+                            if map.get(&by).is_some_and(|(id, _)| *id > this) {
+                                return;
+                            }
+                            if let Some((_, older)) = map.insert(by, (this, handle)) {
+                                let _ = older.shutdown();
+                            }
                         }
                         let payload = |kind: u8, text: &str| {
                             on_payload(kind, text, from, by, &target_news, &sources, &shown)
