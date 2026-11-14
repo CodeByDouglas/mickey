@@ -7,8 +7,9 @@
 //! GNOME 46's dialog for this has no "remember", so the capture starts only
 //! once a peer is placed beside this PC: with no edge to watch, no question.
 //!
-//! On Sway, which has no InputCapture portal, the same lines become
-//! one-pixel layer surfaces instead (`edges::sway`, #178).
+//! Where there is no InputCapture portal (Sway, #178; COSMIC and other
+//! wlroots desktops, #429), the same lines become one-pixel layer surfaces
+//! instead (`edges::strips`).
 
 use crate::edges::{self, Line};
 use crate::monitors::Monitor;
@@ -30,8 +31,18 @@ pub struct PortalEdges {
     wanted: Arc<Mutex<Vec<Line>>>,
     /// The pixel just off this desktop each push reached.
     hits: Receiver<(i32, i32)>,
-    /// On Sway: makes its thread read `wanted` again.
-    wake: Option<Box<dyn Fn() + Send>>,
+    /// With the strips: makes their thread read `wanted` again. Set from
+    /// the capture thread, which decides between the strips and the portal.
+    wake: Wake,
+}
+
+/// The strips' wake-up, once they run.
+type Wake = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
+
+/// Whether this desktop's portal offers InputCapture. Asked once, when the
+/// first edge is placed; without it (COSMIC, #429) the strips take over.
+fn input_capture_offered() -> bool {
+    async_io::block_on(InputCapture::new()).is_ok()
 }
 
 impl PortalEdges {
@@ -40,23 +51,29 @@ impl PortalEdges {
     pub fn start(here: Vec<Monitor>, barriers: Vec<Line>) -> PortalEdges {
         let wanted = Arc::new(Mutex::new(barriers));
         let (hit, hits) = std::sync::mpsc::channel();
-        if crate::desktop::session() == crate::desktop::Session::Sway {
-            let wake = crate::edges::sway::start(Arc::clone(&wanted), hit)
-                .inspect_err(|err| eprintln!("mickey: no screen edges here: {err}"))
-                .ok();
-            return PortalEdges { wanted, hits, wake };
-        }
-        let shared = Arc::clone(&wanted);
+        let wake = Wake::default();
+        let (shared, slot) = (Arc::clone(&wanted), Arc::clone(&wake));
+        // Off the main loop: asking the portal what it offers may wait on
+        // D-Bus (a portal still starting at login), and the main loop
+        // carries the keyboard.
         crate::threads::spawn("edge capture", move || {
+            let sway = crate::desktop::session() == crate::desktop::Session::Sway;
+            if sway || !input_capture_offered() {
+                match crate::edges::strips::start(shared, hit) {
+                    Ok(wake) => {
+                        // Barriers set while the strips were starting.
+                        wake();
+                        *slot.lock_anyway() = Some(wake);
+                    }
+                    Err(err) => eprintln!("mickey: no screen edges here: {err}"),
+                }
+                return;
+            }
             if let Err(err) = async_io::block_on(watch(&here, &shared, &hit)) {
                 eprintln!("mickey: no screen edges here: {err}");
             }
         });
-        PortalEdges {
-            wanted,
-            hits,
-            wake: None,
-        }
+        PortalEdges { wanted, hits, wake }
     }
 
     /// Asks for these barriers instead (the layout or who is online changed).
@@ -67,7 +84,7 @@ impl PortalEdges {
         }
         *wanted = barriers;
         drop(wanted);
-        if let Some(wake) = &self.wake {
+        if let Some(wake) = self.wake.lock_anyway().as_ref() {
             wake();
         }
     }

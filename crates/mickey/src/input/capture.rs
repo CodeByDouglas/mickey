@@ -84,9 +84,9 @@ pub fn find_devices() -> io::Result<Vec<Found>> {
 
 fn classify(path: &Path) -> io::Result<Option<Found>> {
     let device = Device::open(path)?;
-    // Our own uinput device (a target in the same `mickey run`) carries
-    // input that came from another PC; capturing it would send it back.
-    if device.name()? == crate::platform::uinput::DEVICE_NAME {
+    // Our own uinput devices (a target in the same `mickey run`) carry
+    // input that came from another PC; capturing them would send it back.
+    if crate::platform::uinput::is_mickeys(&device.name()?) {
         return Ok(None);
     }
     let kind = if device.supports(EV_KEY, KEY_A)? && device.supports(EV_KEY, KEY_Z)? {
