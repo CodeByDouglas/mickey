@@ -21,11 +21,23 @@ pub fn this_pc() -> Result<Vec<Monitor>, String> {
             Session::Portal => {}
         }
         let monitors = crate::desktop::portal::get().map(crate::desktop::portal::Portal::monitors);
-        monitors
-            .filter(|monitors| !monitors.is_empty())
-            .ok_or_else(|| {
-                "no Hyprland, and the RemoteDesktop portal named no monitors".to_string()
-            })
+        if let Some(monitors) = monitors.filter(|monitors| !monitors.is_empty()) {
+            return Ok(monitors);
+        }
+        // No RemoteDesktop portal (COSMIC, wlroots desktops other than Sway):
+        // Wayland's own xdg-output names them, in the same logical layout.
+        match crate::desktop::outputs::outputs() {
+            Ok(named) if !named.is_empty() => {
+                Ok(named.into_iter().map(|(_, monitor)| monitor).collect())
+            }
+            Ok(_) => Err(
+                "no Hyprland, and neither the RemoteDesktop portal nor xdg-output named a monitor"
+                    .to_string(),
+            ),
+            Err(err) => Err(format!(
+                "no Hyprland, the RemoteDesktop portal named no monitors, and xdg-output: {err}"
+            )),
+        }
     }
 }
 

@@ -143,3 +143,24 @@ The position is read only while the mouse moves.
   answer still being worked out by the edge thread at that moment is not
   caught; it takes a few milliseconds, against a hop that takes longer.
   Slow moves never showed it: little motion falls in that window.
+
+### Desktops without InputCapture (2026-11-14, #429)
+
+- **COSMIC has no InputCapture portal**, so the portal path cannot see the
+  pointer reach an edge there. Checked in a COSMIC session (the Pop!_OS
+  24.04 ISO in the `pop` VM): `No such interface
+  org.freedesktop.portal.InputCapture`; its current portal source does not
+  declare it either. The ISO's portal has no RemoteDesktop either, so
+  Mickey found no monitors of its own.
+- **The layer-shell strips work there.** A spike with the same one-pixel
+  overlay surface as the Sway strips (`edges/sway.rs`) mapped invisibly on
+  COSMIC and reported `wl_pointer.enter` at the height the pointer was put
+  (y 122.1 and 683.6 of 800 for 15% and 85%). So the strips can serve any
+  desktop with layer-shell when InputCapture is missing, which would also
+  give edges to river, labwc and Wayfire.
+- **Monitors from xdg-output.** Where no portal or compositor IPC names
+  the monitors, `desktop::outputs` asks Wayland itself
+  (`zxdg_output_manager_v1`): each output's name, logical position and
+  size, the same layout the portal and Sway's IPC give. Checked on
+  Hyprland with its IPC hidden: one monitor, 1536x864 at 0,0, as Hyprland
+  says.

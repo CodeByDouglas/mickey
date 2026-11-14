@@ -3,6 +3,7 @@
 //! X server, or the portals on GNOME and KDE, PRD 0004).
 
 pub mod hyprland;
+pub mod outputs;
 pub mod portal;
 pub mod sway;
 pub mod x11;

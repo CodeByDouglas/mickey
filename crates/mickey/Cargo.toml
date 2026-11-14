@@ -61,6 +61,10 @@ ksni = { version = "0.3", default-features = false, features = ["blocking", "asy
 # already in the tree through arboard.
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# This PC's monitors from Wayland itself (xdg-output, #429), where no portal
+# or compositor IPC names them. Already in the tree through the settings
+# window's toolkit; "unstable" is the protocol's group, not a quality.
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 # X11 sessions (#178): the monitors (RandR), the pointer and warping it,
 # from the X server. Already in the tree through arboard; pure Rust, so
 # no libX11 or libxcb at run time.
