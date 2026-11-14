@@ -5,7 +5,7 @@
 #[cfg(target_os = "linux")]
 pub mod portal;
 #[cfg(target_os = "linux")]
-pub mod sway;
+pub mod strips;
 
 use crate::monitors::Monitor;
 

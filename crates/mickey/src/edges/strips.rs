@@ -1,4 +1,5 @@
-//! Screen edges on Sway (#178), where no one says where the cursor is: a
+//! Screen edges where no one says where the cursor is (Sway, #178; and
+//! desktops with no InputCapture portal, such as COSMIC, #429): a
 //! one-pixel layer surface (wlr-layer-shell) on each stretch of edge that
 //! leads to a placed peer. The cursor entering one is the push onto that
 //! edge; Mickey then switches the focus as it always does, reading input
@@ -100,6 +101,17 @@ struct Edge {
     size: (u32, u32),
 }
 
+/// This PC's outputs with their names, for putting each strip on the
+/// right one: Sway's IPC on Sway, Wayland's xdg-output elsewhere.
+fn named_outputs() -> Vec<(String, Monitor)> {
+    let named = if crate::desktop::session() == crate::desktop::Session::Sway {
+        crate::desktop::sway::outputs()
+    } else {
+        crate::desktop::outputs::outputs()
+    };
+    named.unwrap_or_default()
+}
+
 /// Where the strip for one line goes (`place_strip`).
 #[derive(Debug, PartialEq)]
 struct Placement {
@@ -191,7 +203,7 @@ impl Strips {
         let (Some(compositor), Some(layer_shell)) = (&self.compositor, &self.layer_shell) else {
             return;
         };
-        let named = crate::desktop::sway::outputs().unwrap_or_default();
+        let named = named_outputs();
         let here: Vec<Monitor> = named.iter().map(|(_, monitor)| *monitor).collect();
         for line in wanted {
             let Some(Placement {
@@ -210,6 +222,16 @@ impl Strips {
                 .iter()
                 .find(|(_, name)| name.as_deref() == Some(named[monitor].0.as_str()))
                 .map(|(output, _)| output);
+            // With several monitors, a strip whose output was not found would
+            // land wherever the compositor puts it, with this monitor's
+            // margins: leave that edge out instead.
+            if output.is_none() && named.len() > 1 {
+                eprintln!(
+                    "mickey: no screen edge on {}: its output was not found",
+                    named[monitor].0
+                );
+                continue;
+            }
             let surface = compositor.create_surface(handle, ());
             let index = self.edges.len();
             let layer = layer_shell.get_layer_surface(
