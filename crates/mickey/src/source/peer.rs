@@ -101,15 +101,38 @@ pub(super) fn connect_and_pair(
     let mut link = transport::connect(to, identity).map_err(|err| err.to_string())?;
     let peer_key = *link.peer_key();
     let code = link.pairing_code();
+    let new = !trusted.lock_anyway().is_trusted(&peer_key);
     if !trust::trust_or_ask(trusted, &peer_key, to, &code, name)? {
         return Err("not paired; nothing was sent".into());
     }
     println!("mickey: waiting for {name} to accept this PC");
-    transport::hello(&mut link).map_err(|err| match err.kind() {
-        std::io::ErrorKind::UnexpectedEof => "it refused to pair with this PC".to_string(),
-        _ => err.to_string(),
-    })?;
+    transport::hello(&mut link).map_err(|err| refusal(&err, new, name))?;
+    // Only now: had the other PC refused, this one would have trusted a PC
+    // that never paired with it (#420).
+    if new {
+        trust::remember(trusted, &peer_key, to, name)?;
+    }
     Ok(link)
+}
+
+/// What to tell the person when `name` did not answer the handshake with
+/// Hello. `new`: this PC had just asked to pair with it.
+fn refusal(err: &std::io::Error, new: bool, name: &str) -> String {
+    use std::io::ErrorKind::{TimedOut, UnexpectedEof, WouldBlock};
+    match (err.kind(), new) {
+        // It closed the connection: its pairing was closed, another PC was
+        // asking there, or its owner said no.
+        (UnexpectedEof, true) => format!(
+            "{name} did not pair: its pairing is closed or it said no. Open pairing on {name} (Settings → PCs) and try again"
+        ),
+        (UnexpectedEof, false) => format!(
+            "{name} refused this PC; it may have forgotten it: pair them again from its settings"
+        ),
+        (TimedOut | WouldBlock, true) => {
+            format!("{name} did not answer the pairing in time; try again")
+        }
+        _ => err.to_string(),
+    }
 }
 
 /// Opens the data link to a connected peer in the background and hands it
@@ -226,5 +249,31 @@ pub(super) fn save_key(name: &str, key: &[u8; 32]) {
     });
     if let Err(err) = saved {
         eprintln!("mickey: cannot remember {name}'s key: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn a_refused_pairing_says_what_to_do_on_the_other_pc() {
+        let closed = refusal(&Error::from(ErrorKind::UnexpectedEof), true, "Desk");
+        assert!(closed.contains("Open pairing on Desk"), "{closed}");
+        let late = refusal(&Error::from(ErrorKind::TimedOut), true, "Desk");
+        assert!(late.contains("in time"), "{late}");
+    }
+
+    #[test]
+    fn a_paired_pc_that_refuses_may_have_forgotten_this_one() {
+        let text = refusal(&Error::from(ErrorKind::UnexpectedEof), false, "Desk");
+        assert!(text.contains("forgotten"), "{text}");
+    }
+
+    #[test]
+    fn other_errors_keep_their_own_words() {
+        let text = refusal(&Error::other("target speaks protocol 9"), true, "Desk");
+        assert_eq!(text, "target speaks protocol 9");
     }
 }
