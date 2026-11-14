@@ -258,8 +258,9 @@ placeholders.
 
 The language is set once at start-up, from `[interface] language` in
 `config.toml` (`auto` follows the system). The settings window's General
-tab changes it at once, without a restart: the next frame reads the new
-language.
+tab changes it at once for the settings window: the next frame reads the
+new language. The tray and the messages of the `mickey` process keep the
+language they started with until Mickey restarts.
 
 What is translated: every label, button, message and tooltip in the
 switcher, the settings, the pairing question, the clipboard history, the

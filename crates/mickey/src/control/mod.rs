@@ -173,8 +173,8 @@ pub fn waybar_line(status: Option<&Status>) -> String {
     let Some(status) = status else {
         return format!(
             r#"{{"text":"{}","tooltip":"{}","class":"off"}}"#,
-            mickey_config::i18n::t("waybar.off_text"),
-            mickey_config::i18n::t("waybar.off_tooltip"),
+            json_escape(mickey_config::i18n::t("waybar.off_text")),
+            json_escape(mickey_config::i18n::t("waybar.off_tooltip")),
         );
     };
     let online = status.peers.iter().filter(|(_, online)| *online).count();
