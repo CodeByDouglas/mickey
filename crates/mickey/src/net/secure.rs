@@ -67,6 +67,11 @@ impl Link {
         self.stream.set_read_timeout(timeout)
     }
 
+    /// Closes the connection both ways, waking whoever is reading it.
+    pub fn shutdown(&self) -> io::Result<()> {
+        self.stream.shutdown(std::net::Shutdown::Both)
+    }
+
     /// The other side's public key, proven by the handshake.
     pub fn peer_key(&self) -> &[u8; 32] {
         &self.peer

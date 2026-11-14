@@ -55,6 +55,7 @@ pub fn target(
         );
     }
     let input_slots = SharedSlots::default();
+    let refused_said = std::sync::Mutex::new(None);
     // Every source learns when this PC's monitors move (#365).
     let monitors = monitors::keep_latest(std::time::Duration::from_secs(1));
     loop {
@@ -76,6 +77,7 @@ pub fn target(
             monitors: monitors.clone(),
         };
         let Some(slot) = Slot::take(&input_slots, peer.ip()) else {
+            slots::say_refused(&refused_said, peer.ip());
             continue;
         };
         crate::threads::try_spawn("serve source", move || {

@@ -56,6 +56,15 @@ pub fn hello(link: &mut Link) -> io::Result<()> {
 /// How long a new PC's owner has to answer the pair window.
 const PAIR_WAIT: Duration = Duration::from_secs(90);
 
+/// How long a source may say nothing before the target gives up on it. A
+/// source pings every second, so only one that is gone (asleep, switched
+/// off, off the network) is this quiet: its keys are let go and its
+/// connection slot comes back (#452).
+#[cfg(not(test))]
+const SOURCE_SILENT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const SOURCE_SILENT: Duration = Duration::from_millis(300);
+
 /// The target's side of the handshake, for one accepted connection. The
 /// caller checks the source's key (pairing) before calling `serve`.
 pub fn accept(stream: TcpStream, identity: &Identity) -> io::Result<Link> {
@@ -138,6 +147,7 @@ pub fn serve(
         Message::Hello { version: VERSION } => {
             link.send(&Message::Hello { version: VERSION })?;
             link.send(&Message::monitors(monitors))?;
+            link.set_read_timeout(Some(SOURCE_SILENT))?;
         }
         Message::Hello { version } => {
             return Err(invalid(format!(
@@ -158,6 +168,18 @@ pub fn serve(
         let message = match link.recv() {
             Ok(message) => message,
             Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break Ok(()),
+            // Linux says WouldBlock, Windows TimedOut.
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                break Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("the source went silent (no ping for {SOURCE_SILENT:?})"),
+                ));
+            }
             Err(err) => break Err(err),
         };
         // Forgotten while connected (a lost laptop): nothing more from it,
@@ -332,6 +354,49 @@ mod tests {
         code: 30,
         pressed: true,
     };
+
+    #[test]
+    fn a_source_that_goes_silent_is_let_go_and_its_keys_released() {
+        let (addr, target) = fake_target();
+        let mut link = source(addr);
+        link.send(&Message::Input(KEY_A)).unwrap();
+        // Asleep with the key down: the connection stays open, nothing comes.
+        let (result, emitted) = target.join().unwrap();
+        let err = result.expect_err("a silent source is let go");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(
+            emitted,
+            [
+                KEY_A,
+                InputEvent::Key {
+                    code: 30,
+                    pressed: false
+                }
+            ],
+            "the key it held is let go"
+        );
+        drop(link);
+    }
+
+    #[test]
+    fn a_source_that_pings_is_kept() {
+        let (addr, target) = fake_target();
+        let mut link = source(addr);
+        // Pings closer together than SOURCE_SILENT, for longer than it.
+        // Each pong is read, as a source does: closing with unread data
+        // would reset the connection instead of closing it.
+        for id in 0..6 {
+            link.send(&Message::Ping { id }).unwrap();
+            assert_eq!(link.recv().unwrap(), Message::Pong { id });
+            thread::sleep(SOURCE_SILENT / 3);
+        }
+        drop(link);
+        let (result, _) = target.join().unwrap();
+        assert!(
+            result.is_ok(),
+            "a source that keeps pinging is not cut off: {result:?}"
+        );
+    }
 
     #[test]
     fn events_cross_and_disconnect_releases_held_keys() {

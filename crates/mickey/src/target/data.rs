@@ -5,10 +5,16 @@ use super::slots::{SharedSlots, Slot};
 use super::{Shown, Sources, show_switcher_here};
 use crate::threads::LockAnyway;
 use crate::{
-    audio, clipboard, net::group, net::identity, net::transport, net::trust, source, window,
+    audio, clipboard, net::group, net::identity, net::secure, net::transport, net::trust, source,
+    window,
 };
 use mickey_config as config;
 use std::net::SocketAddr;
+
+/// Each source's newest data link, by key, with the number it was opened
+/// as: a source has one at a time, so a new one closes the one before.
+type Newest =
+    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<[u8; 32], (u64, secure::Link)>>>;
 
 /// Answers paired PCs' data links (PRD 0011) on the port after `listen`,
 /// each on its own thread, for as long as Mickey runs.
@@ -34,13 +40,24 @@ pub(super) fn serve_clipboard(
     let shown = Shown::default();
     crate::threads::spawn("data accept", move || {
         let slots = SharedSlots::default();
+        let refused_said = std::sync::Mutex::new(None);
+        // Each source's newest data link, by key: a source has one at a
+        // time, so a new one closes the one before (#452). A data link
+        // carries no pings, so an old one from a PC that vanished would
+        // otherwise hold its slot for ever.
+        let newest = Newest::default();
+        let mut opened: u64 = 0;
         for stream in listener.incoming().flatten() {
             let Ok(from) = stream.peer_addr() else {
                 continue;
             };
             let Some(slot) = Slot::take(&slots, from.ip()) else {
+                super::slots::say_refused(&refused_said, from.ip());
                 continue;
             };
+            let newest = newest.clone();
+            opened += 1;
+            let this = opened;
             let (identity, trusted, keeper) = (identity.clone(), trusted.clone(), keeper.clone());
             let (target_news, sources, shown) =
                 (target_news.clone(), sources.clone(), shown.clone());
@@ -52,6 +69,12 @@ pub(super) fn serve_clipboard(
                 match transport::accept_data(stream, &identity, is_trusted) {
                     Ok(link) => {
                         let by = *link.peer_key();
+                        if let Ok(handle) = link.try_clone()
+                            && let Some((_, older)) =
+                                newest.lock_anyway().insert(by, (this, handle))
+                        {
+                            let _ = older.shutdown();
+                        }
                         let payload = |kind: u8, text: &str| {
                             on_payload(kind, text, from, by, &target_news, &sources, &shown)
                         };
@@ -70,6 +93,12 @@ pub(super) fn serve_clipboard(
                             payload,
                             || trusted.lock_anyway().is_trusted(&by),
                         );
+                        // Ended: let go of its handle, unless a newer link
+                        // from the same PC took its place already.
+                        let mut newest = newest.lock_anyway();
+                        if newest.get(&by).is_some_and(|(id, _)| *id == this) {
+                            newest.remove(&by);
+                        }
                     }
                     Err(err) => eprintln!("mickey: data link refused: {err}"),
                 }
