@@ -20,6 +20,7 @@ use crate::input::event::InputEvent;
 #[cfg(windows)]
 use crate::threads::LockAnyway;
 use mickey_config as config;
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
