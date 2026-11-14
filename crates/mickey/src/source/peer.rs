@@ -65,6 +65,30 @@ pub(super) struct Shared {
     /// The trusted PCs. Reconnects never ask, so a peer that is not in
     /// here is not retried.
     pub(super) trusted: trust::Shared,
+    /// The addresses a first connection is pairing with right now: a second
+    /// Connect while one waits (up to a minute and a half for the other PC's
+    /// answer) must not open a second pair window.
+    pub(super) pairing: Pairing,
+}
+
+/// The addresses being paired with, shared with the threads doing it.
+pub(super) type Pairing = Arc<std::sync::Mutex<std::collections::HashSet<SocketAddr>>>;
+
+/// Marks `address` as being paired with until dropped, whether the pairing
+/// worked or not.
+struct PairingWith(Pairing, SocketAddr);
+
+impl PairingWith {
+    fn start(pairing: &Pairing, address: SocketAddr) -> PairingWith {
+        pairing.lock_anyway().insert(address);
+        PairingWith(Arc::clone(pairing), address)
+    }
+}
+
+impl Drop for PairingWith {
+    fn drop(&mut self) {
+        self.0.lock_anyway().remove(&self.1);
+    }
 }
 
 /// A peer's first connection, on its own thread: pairs if needed, then
@@ -77,13 +101,17 @@ pub(super) fn connect_first(
     back: &Sender<(usize, Link)>,
 ) {
     let (shared, back) = (Arc::clone(shared), back.clone());
+    // Marked before the thread starts, so the main loop sees it at once.
+    let pairing = PairingWith::start(&shared.pairing, to);
     crate::threads::spawn("connect", move || {
-        match connect_and_pair(&shared.identity, &shared.trusted, &name, to) {
+        let result = connect_and_pair(&shared.identity, &shared.trusted, &name, to);
+        drop(pairing);
+        match result {
             Ok(link) => {
                 let _ = back.send((index, link));
             }
             Err(err) => {
-                println!("mickey: {name} ({to}) is offline: {err}");
+                println!("mickey: {name} ({to}) not connected: {err}");
                 reconnect(index, to, &shared, &back);
             }
         }
@@ -101,15 +129,39 @@ pub(super) fn connect_and_pair(
     let mut link = transport::connect(to, identity).map_err(|err| err.to_string())?;
     let peer_key = *link.peer_key();
     let code = link.pairing_code();
+    let new = !trusted.lock_anyway().is_trusted(&peer_key);
     if !trust::trust_or_ask(trusted, &peer_key, to, &code, name)? {
         return Err("not paired; nothing was sent".into());
     }
     println!("mickey: waiting for {name} to accept this PC");
-    transport::hello(&mut link).map_err(|err| match err.kind() {
-        std::io::ErrorKind::UnexpectedEof => "it refused to pair with this PC".to_string(),
-        _ => err.to_string(),
-    })?;
+    transport::hello(&mut link).map_err(|err| refusal(&err, new, name))?;
+    // Only now: had the other PC refused, this one would have trusted a PC
+    // that never paired with it (#420).
+    if new {
+        trust::remember(trusted, &peer_key, to, name)?;
+    }
     Ok(link)
+}
+
+/// What to tell the person when `name` did not answer the handshake with
+/// Hello. `new`: this PC had just asked to pair with it.
+fn refusal(err: &std::io::Error, new: bool, name: &str) -> String {
+    use std::io::ErrorKind::{TimedOut, UnexpectedEof, WouldBlock};
+    match (err.kind(), new) {
+        // It closed the connection: its pairing was closed, another PC was
+        // asking there, or its owner said no.
+        // A Mickey speaking another protocol version closes it the same way.
+        (UnexpectedEof, true) => format!(
+            "{name} did not pair: its pairing is closed, it said no, or it runs another Mickey version. Open pairing on {name} (Settings → PCs) and try again"
+        ),
+        (UnexpectedEof, false) => format!(
+            "{name} closed the connection: it may have forgotten this PC (pair them again from its settings) or run another Mickey version"
+        ),
+        (TimedOut | WouldBlock, true) => {
+            format!("{name} did not answer the pairing in time; try again")
+        }
+        _ => err.to_string(),
+    }
 }
 
 /// Opens the data link to a connected peer in the background and hands it
@@ -226,5 +278,47 @@ pub(super) fn save_key(name: &str, key: &[u8; 32]) {
     });
     if let Err(err) = saved {
         eprintln!("mickey: cannot remember {name}'s key: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn a_refused_pairing_says_what_to_do_on_the_other_pc() {
+        let closed = refusal(&Error::from(ErrorKind::UnexpectedEof), true, "Desk");
+        assert!(closed.contains("Open pairing on Desk"), "{closed}");
+        let late = refusal(&Error::from(ErrorKind::TimedOut), true, "Desk");
+        assert!(late.contains("in time"), "{late}");
+    }
+
+    #[test]
+    fn a_paired_pc_that_refuses_may_have_forgotten_this_one() {
+        let text = refusal(&Error::from(ErrorKind::UnexpectedEof), false, "Desk");
+        assert!(text.contains("forgotten"), "{text}");
+    }
+
+    #[test]
+    fn a_pairing_in_progress_is_marked_until_it_ends() {
+        let pairing = Pairing::default();
+        let to: SocketAddr = "192.0.2.7:4242".parse().unwrap();
+        let marked = PairingWith::start(&pairing, to);
+        assert!(
+            pairing.lock_anyway().contains(&to),
+            "a second Connect sees it"
+        );
+        drop(marked);
+        assert!(
+            !pairing.lock_anyway().contains(&to),
+            "and may pair again once it ended"
+        );
+    }
+
+    #[test]
+    fn other_errors_keep_their_own_words() {
+        let text = refusal(&Error::other("target speaks protocol 9"), true, "Desk");
+        assert_eq!(text, "target speaks protocol 9");
     }
 }
