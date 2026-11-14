@@ -222,6 +222,16 @@ impl Strips {
                 .iter()
                 .find(|(_, name)| name.as_deref() == Some(named[monitor].0.as_str()))
                 .map(|(output, _)| output);
+            // With several monitors, a strip whose output was not found would
+            // land wherever the compositor puts it, with this monitor's
+            // margins: leave that edge out instead.
+            if output.is_none() && named.len() > 1 {
+                eprintln!(
+                    "mickey: no screen edge on {}: its output was not found",
+                    named[monitor].0
+                );
+                continue;
+            }
             let surface = compositor.create_surface(handle, ());
             let index = self.edges.len();
             let layer = layer_shell.get_layer_surface(
