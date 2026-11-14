@@ -164,3 +164,12 @@ The position is read only while the mouse moves.
   size, the same layout the portal and Sway's IPC give. Checked on
   Hyprland with its IPC hidden: one monitor, 1536x864 at 0,0, as Hyprland
   says.
+- **Placing without a portal (#459).** A controlled PC with no
+  RemoteDesktop portal (the same COSMIC ISO) could not put the cursor where
+  it came in, nor follow it to see it pushed off an edge. A uinput
+  absolute pointer (`ABS_X`/`ABS_Y`, like a drawing tablet) puts it at the
+  exact pixel on any Linux desktop (checked: y 400.0 and 650.0 of 800), so
+  `desktop::absolute` does what the portal path does: adds each motion and
+  places the cursor. Round trip checked in the VM: out across an edge,
+  back across the other PC's edge, and out again. Coming home onto a strip
+  counts as "just placed", or the cursor bounced straight back.
