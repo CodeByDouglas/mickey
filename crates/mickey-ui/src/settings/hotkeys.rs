@@ -97,7 +97,7 @@ impl Settings {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!(
-                    "{}  {}:",
+                    "{}  {}",
                     crate::theme::icon::SHIELD,
                     i18n::t("hotkeys.always_home")
                 ))
@@ -150,7 +150,7 @@ impl Settings {
                     if self.typing == Some(row) {
                         let default = hotkey_default(row);
                         let hint = if default.is_empty() {
-                            i18n::t("hotkeys.double_tap")
+                            i18n::t("hotkeys.none")
                         } else {
                             default
                         };
@@ -220,7 +220,7 @@ impl Settings {
             ui.label(i18n::t("hotkeys.double_tap_within"));
             ui.add(
                 egui::Slider::new(&mut form.double_tap_ms, config::DOUBLE_TAP_MS)
-                    .suffix(i18n::t("hotkeys.ms"))
+                    .suffix(format!(" {}", i18n::t("hotkeys.ms")))
                     .step_by(50.0),
             );
         });
@@ -235,7 +235,7 @@ impl Settings {
 fn hotkey_default(row: usize) -> &'static str {
     match row {
         0 => config::DEFAULT_NEXT,
-        1 => "",
+        1 => i18n::t("hotkeys.back_home_default"),
         2 => config::DEFAULT_SWITCHER,
         3 => config::DEFAULT_FORWARD,
         4 => config::DEFAULT_BACK,

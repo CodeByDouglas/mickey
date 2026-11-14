@@ -333,11 +333,7 @@ fn settings_window() -> ExitCode {
     }
     let options = eframe::NativeOptions {
         viewport: crate::theme::viewport()
-            .with_title(format!(
-                "{} · {}",
-                i18n::t("app.name"),
-                i18n::t("tabs.general")
-            ))
+            .with_title(i18n::t("settings.window_title"))
             .with_app_id("mickey-settings")
             .with_inner_size([720.0, 500.0]),
         ..Default::default()

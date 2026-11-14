@@ -104,7 +104,11 @@ impl Settings {
                         let monitors_text = match info.map(|info| info.monitors.len()) {
                             Some(0) | None => i18n::t("pcs.monitors_unknown").to_string(),
                             Some(1) => format!("{}  {}", icon::MONITOR, i18n::t("pcs.one_monitor")),
-                            Some(n) => i18n::tf("pcs.n_monitors", &[("n", &n.to_string())]),
+                            Some(n) => format!(
+                                "{}  {}",
+                                icon::MONITOR,
+                                i18n::tf("pcs.n_monitors", &[("n", &n.to_string())])
+                            ),
                         };
                         ui.weak(monitors_text);
                         // Its Mickey version (PRD 0013): one behind this PC
@@ -227,7 +231,7 @@ impl Settings {
                     self.pairing = pairing_with(&answer).map(|name| (name, Instant::now()));
                     answer
                 }
-                Err(err) => i18n::tf("pcs.pairing_failed", &[("err", &err)]),
+                Err(err) => i18n::tf("pcs.connect_failed", &[("err", &err)]),
             };
         }
 

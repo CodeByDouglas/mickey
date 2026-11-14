@@ -481,7 +481,7 @@ pub fn run(
                 }
                 News::Refused => {
                     if focus_machine.focus() == Focus::Remote(index) {
-                        eprintln!(
+                        println!(
                             "{}",
                             mickey_config::i18n::tf(
                                 "messages.peer_refused",
