@@ -226,14 +226,21 @@ pub fn spawn_readers<T: From<InputEvent> + Send + 'static>(
                         // blocks for the next event if called again, so we
                         // read only once per `wait` and then let `tick`
                         // run — that is the whole point of `wait`.
-                        if device.read_events(&mut batch).is_ok() {
-                            for &raw in &batch {
-                                translator.feed(raw, |event| {
-                                    closed |= events.send(T::from(event)).is_err();
-                                });
-                                if closed {
-                                    return;
-                                }
+                        match device.read_events(&mut batch) {
+                            Ok(()) => {}
+                            // Nothing read: the last batch is not sent again.
+                            Err(err) if err.kind() == io::ErrorKind::Interrupted => batch.clear(),
+                            // Unplugged, or a Bluetooth mouse asleep: `wait`
+                            // would keep saying it is readable and this loop
+                            // would spin, so this reader ends, as before.
+                            Err(_) => return,
+                        }
+                        for &raw in &batch {
+                            translator.feed(raw, |event| {
+                                closed |= events.send(T::from(event)).is_err();
+                            });
+                            if closed {
+                                return;
                             }
                         }
                     }
