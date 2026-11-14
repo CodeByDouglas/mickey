@@ -73,7 +73,7 @@ impl Settings {
                 icon::LAPTOP,
                 i18n::t("this_pc.touchpad_speed")
             ));
-            ui.add(egui::Slider::new(&mut form.speed, 1..=200));
+            ui.add(egui::Slider::new(&mut form.touchpad.speed, 1..=200));
         });
         ui.add_space(12.0);
         sound(ui, form, self.own_key.as_deref());
