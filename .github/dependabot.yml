@@ -1,6 +1,8 @@
 # Dependabot opens a PR when a dependency or a pinned action has a newer
-# version, grouped so it is one PR a week per ecosystem, not dozens.
-# Security fixes come as soon as an advisory is published.
+# version. Patch updates (which keep the API) come grouped, one PR a week per
+# ecosystem. Bigger updates come one per PR: in a 0.x crate even 0.13 → 0.14
+# can change the API, and one that breaks the build must not hold back the
+# others. Security fixes come as soon as an advisory is published.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -8,12 +10,14 @@ updates:
     schedule:
       interval: weekly
     groups:
-      cargo:
+      cargo-patch:
         patterns: ["*"]
+        update-types: ["patch"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     groups:
-      actions:
+      actions-patch:
         patterns: ["*"]
+        update-types: ["patch"]
