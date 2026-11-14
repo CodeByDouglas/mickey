@@ -56,6 +56,8 @@ pub struct Form {
     /// The switcher's custom order, by name; empty: as the layout goes.
     pub order: Vec<String>,
     pub speed: i32,
+    /// The interface language: `auto`, or a code from `i18n::Lang::ALL`.
+    pub language: String,
 }
 
 impl Form {
@@ -104,6 +106,7 @@ impl Form {
             since: config.audio.since,
             order: config.interface.switcher_order.clone(),
             speed: config.touchpad.speed,
+            language: config.interface.language.clone(),
         }
     }
 
@@ -194,6 +197,14 @@ impl Form {
                 .map(|name| config::toml_string(name))
                 .collect();
             out += &format!("switcher_order = [{}]\n", names.join(", "));
+        }
+        // Always written: `auto` is the default, but the owner's choice
+        // survives a save.
+        if self.language != "auto" {
+            out += &format!(
+                "language = {}    # or auto (the system's)\n",
+                config::toml_string(&self.language)
+            );
         }
         let audio = Audio {
             listener: self.listener.clone(),
