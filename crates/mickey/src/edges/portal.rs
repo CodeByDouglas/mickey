@@ -124,7 +124,12 @@ async fn watch(
     hit: &Sender<(i32, i32)>,
 ) -> Result<(), String> {
     let text = |err: ashpd::Error| err.to_string();
-    let capture = InputCapture::new().await.map_err(text)?;
+    // Screen edges need the InputCapture portal. Some desktops have the
+    // portals but not this one (COSMIC, #429): say so, not just the D-Bus
+    // error, so the log tells the person to use the hotkeys.
+    let capture = InputCapture::new().await.map_err(|err| {
+        format!("this desktop offers no input capture portal, which screen edges need; use the hotkeys or the switcher ({err})")
+    })?;
     let caps = Capabilities::Keyboard | Capabilities::Pointer;
     let session = match capture.create_session2(Default::default()).await {
         Ok(session) => {
