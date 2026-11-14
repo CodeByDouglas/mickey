@@ -7,8 +7,9 @@
 //! GNOME 46's dialog for this has no "remember", so the capture starts only
 //! once a peer is placed beside this PC: with no edge to watch, no question.
 //!
-//! On Sway, which has no InputCapture portal, the same lines become
-//! one-pixel layer surfaces instead (`edges::sway`, #178).
+//! Where there is no InputCapture portal (Sway, #178; COSMIC and other
+//! wlroots desktops, #429), the same lines become one-pixel layer surfaces
+//! instead (`edges::strips`).
 
 use crate::edges::{self, Line};
 use crate::monitors::Monitor;
@@ -34,14 +35,20 @@ pub struct PortalEdges {
     wake: Option<Box<dyn Fn() + Send>>,
 }
 
+/// Whether this desktop's portal offers InputCapture. Asked once, when the
+/// first edge is placed; without it (COSMIC, #429) the strips take over.
+fn input_capture_offered() -> bool {
+    async_io::block_on(InputCapture::new()).is_ok()
+}
+
 impl PortalEdges {
     /// Starts the session (the dialog, the first time in a session) on a
     /// thread of its own.
     pub fn start(here: Vec<Monitor>, barriers: Vec<Line>) -> PortalEdges {
         let wanted = Arc::new(Mutex::new(barriers));
         let (hit, hits) = std::sync::mpsc::channel();
-        if crate::desktop::session() == crate::desktop::Session::Sway {
-            let wake = crate::edges::sway::start(Arc::clone(&wanted), hit)
+        if crate::desktop::session() == crate::desktop::Session::Sway || !input_capture_offered() {
+            let wake = crate::edges::strips::start(Arc::clone(&wanted), hit)
                 .inspect_err(|err| eprintln!("mickey: no screen edges here: {err}"))
                 .ok();
             return PortalEdges { wanted, hits, wake };
