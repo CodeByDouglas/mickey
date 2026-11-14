@@ -236,7 +236,11 @@ impl Emitter {
                         return crate::desktop::sway::move_by(dx, dy).map_err(io::Error::other);
                     }
                     (Path::Portal, Some(portal)) => return portal.move_by(dx, dy),
-                    (Path::Absolute, _) => return crate::desktop::absolute::move_by(dx, dy),
+                    // No absolute pointer (none could be made): relative,
+                    // as before #459.
+                    (Path::Absolute, _) if crate::desktop::absolute::move_by(dx, dy).is_ok() => {
+                        return Ok(());
+                    }
                     _ => {}
                 }
                 if dx != 0 {
