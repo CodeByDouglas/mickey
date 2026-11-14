@@ -90,6 +90,15 @@ Section "Mickey"
 
   ; Start it now, elevated, as it will start at every login.
   nsExec::Exec '"$SYSDIR\schtasks.exe" /run /tn "Mickey"'
+
+  ; Microsoft Defender's machine-learning check may delete mickey.exe a few
+  ; seconds after it lands (#419); the installer then finished as if all
+  ; were well, with no tray icon and nothing saying why. Wait a moment and
+  ; say so. A silent install (winget) answers OK by itself.
+  Sleep 3000
+  IfFileExists "$INSTDIR\mickey.exe" mickey_kept
+    MessageBox MB_ICONEXCLAMATION|MB_OK "Windows Security removed mickey.exe right after it was installed.$\r$\n$\r$\nThis is a false alarm: Mickey is not code-signed yet, and a program that reads the keyboard and talks over the network looks suspicious to Defender's automatic check.$\r$\n$\r$\nTo fix it: in Windows Security, open Virus & threat protection > Protection history, choose the item for Mickey and Allow on device (or add $INSTDIR to the exclusions), then run this installer again.$\r$\n$\r$\nMore in the README, under Known limits." /SD IDOK
+  mickey_kept:
 SectionEnd
 
 Section "Uninstall"
