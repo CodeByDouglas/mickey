@@ -32,6 +32,20 @@ static PORTAL: OnceLock<Portal> = OnceLock::new();
 static FAILED_AT: Mutex<Option<Instant>> = Mutex::new(None);
 const TRY_AGAIN: Duration = Duration::from_secs(5);
 
+/// Why the last start failed, as logged: the same reason is logged once,
+/// not at every try (#454).
+static LAST_FAILURE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Whether `reason` should be logged: only when it differs from `last`,
+/// which it then becomes.
+fn is_new(last: &mut Option<String>, reason: &str) -> bool {
+    if last.as_deref() == Some(reason) {
+        return false;
+    }
+    *last = Some(reason.to_string());
+    true
+}
+
 /// How long to wait, at start, for libei to name the monitors.
 const FIRST_MONITORS: Duration = Duration::from_secs(5);
 
@@ -76,10 +90,16 @@ pub fn get() -> Option<&'static Portal> {
     match Portal::start() {
         Ok(portal) => {
             *failed_at = None;
+            *LAST_FAILURE.lock_anyway() = None;
             Some(PORTAL.get_or_init(|| portal))
         }
         Err(err) => {
-            eprintln!("mickey: no RemoteDesktop portal: {err}");
+            if is_new(&mut LAST_FAILURE.lock_anyway(), &err) {
+                eprintln!(
+                    "mickey: no RemoteDesktop portal: {err} (trying again every {} s; logged again only if the reason changes)",
+                    TRY_AGAIN.as_secs()
+                );
+            }
             *failed_at = Some(Instant::now());
             None
         }
@@ -93,8 +113,11 @@ impl Portal {
         let listening = Arc::clone(&shared);
         crate::threads::spawn("portal", move || {
             let result = async_io::block_on(listen(&listening, &ready));
-            if let Err(err) = result {
-                let _ = ready.send(Err(err.clone()));
+            // While `start` waits, it gets the error and `get` logs it; once
+            // started, nobody waits, and a session that ends is logged here.
+            if let Err(err) = result
+                && ready.send(Err(err.clone())).is_err()
+            {
                 eprintln!("mickey: the RemoteDesktop session ended: {err}");
             }
         });
@@ -102,6 +125,9 @@ impl Portal {
         let context = started
             .recv()
             .map_err(|_| "the portal thread ended".to_string())??;
+        // Nobody reads it again: dropped now, a session that ends during
+        // the wait for monitors below is logged by the thread (#454).
+        drop(started);
         let until = Instant::now() + FIRST_MONITORS;
         while shared.lock_anyway().monitors.is_empty() && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(20));
@@ -308,6 +334,20 @@ pub fn slide(monitors: &[Monitor], at: (i32, i32), (dx, dy): (i32, i32)) -> (i32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_portal_is_logged_once_per_reason() {
+        let mut last = None;
+        assert!(
+            is_new(&mut last, "not found"),
+            "the first failure is logged"
+        );
+        assert!(
+            !is_new(&mut last, "not found"),
+            "the same one, every 5 s, is not"
+        );
+        assert!(is_new(&mut last, "the person said no"), "a new reason is");
+    }
 
     fn screen(x: i32, y: i32, width: i32, height: i32) -> Monitor {
         Monitor {

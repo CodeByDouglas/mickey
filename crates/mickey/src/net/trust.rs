@@ -206,6 +206,10 @@ impl TrustedPeers {
 /// accepted at once; an unknown one only after the person at this machine
 /// sees the same pairing `code` on both PCs and pairs, in a window or else
 /// on the terminal. Anything else refuses. `who` names the other PC.
+///
+/// It does not remember a newly paired peer: the other PC may still refuse
+/// (its pairing closed, or its owner said no), so the caller does, with
+/// `remember`, once that PC has accepted too (#420).
 pub fn trust_or_ask(
     trusted: &Shared,
     peer_key: &[u8; 32],
@@ -218,12 +222,20 @@ pub fn trust_or_ask(
         return Ok(true);
     }
     // The list is not held while the person decides.
-    if !ask_once(peer_key, address, code, who)? {
-        return Ok(false);
-    }
-    lock().add(*peer_key, &address.to_string())?;
-    println!("mickey: paired; it will connect without asking from now on");
-    Ok(true)
+    ask_once(peer_key, address, code, who)
+}
+
+/// Adds a peer both sides agreed to pair with: from now on it connects
+/// without asking.
+pub fn remember(
+    trusted: &Shared,
+    peer_key: &[u8; 32],
+    address: SocketAddr,
+    who: &str,
+) -> Result<(), String> {
+    trusted.lock_anyway().add(*peer_key, &address.to_string())?;
+    println!("mickey: paired with {who}; it will connect without asking from now on");
+    Ok(())
 }
 
 /// How long pairing stays open after the owner opens it (#181).

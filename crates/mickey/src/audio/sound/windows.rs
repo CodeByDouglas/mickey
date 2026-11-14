@@ -15,8 +15,8 @@ use crate::audio::wire::{CHANNELS, FRAMES, PCM_BYTES, RATE};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use wasapi::{
-    AudioCaptureClient, AudioClient, AudioRenderClient, Direction, Handle, SampleType, StreamMode,
-    WaveFormat, get_default_device, initialize_mta,
+    AudioCaptureClient, AudioClient, AudioRenderClient, DeviceEnumerator, Direction, Handle,
+    SampleType, StreamMode, WaveFormat, initialize_mta,
 };
 
 /// The device buffer, in 100 ns units: 20 ms.
@@ -28,8 +28,10 @@ const QUIET: Duration = Duration::from_millis(50);
 /// A shared-mode client and the event it signals once per device period.
 fn client(direction: Direction) -> Result<(AudioClient, Handle), String> {
     let _ = initialize_mta();
-    let format = WaveFormat::new(16, 16, &SampleType::Int, RATE as usize, CHANNELS, None);
-    let device = get_default_device(&Direction::Render).map_err(|err| err.to_string())?;
+    let format = WaveFormat::new(16, 16, SampleType::Int, RATE as usize, CHANNELS, None);
+    let device = DeviceEnumerator::new()
+        .and_then(|devices| devices.get_default_device(Direction::Render))
+        .map_err(|err| err.to_string())?;
     let mut client = device.get_iaudioclient().map_err(|err| err.to_string())?;
     let mode = StreamMode::EventsShared {
         autoconvert: true,
@@ -37,7 +39,7 @@ fn client(direction: Direction) -> Result<(AudioClient, Handle), String> {
     };
     // Capture on a render device is loopback: what it plays.
     client
-        .initialize_client(&format, &direction, &mode)
+        .initialize_client(&format, direction, mode, None)
         .map_err(|err| err.to_string())?;
     // Asked for after initializing and before starting, as WASAPI wants.
     let wake = client
@@ -143,7 +145,9 @@ impl Player {
             let _ = self.wake.wait_for_event(QUIET.as_millis() as u32);
         }
         self.render
-            .write_to_device(FRAMES, &at_volume(pcm, volume), None)
+            // The frame count comes from the slice's length: PCM_BYTES is
+            // exactly FRAMES frames, so it is the same as before.
+            .write_to_device(&at_volume(pcm, volume), None)
             .map_err(|err| format!("playing stopped: {err}"))
     }
 }
