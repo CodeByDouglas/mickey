@@ -139,7 +139,8 @@ it → set a breakpoint where it is interesting → approve → merge.*
   machines) go in the PR description.
 - CI runs on every PR and must be green before merge:
   `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-  `cargo test`.
+  `cargo test`, `tools/check-unsafe.sh`, `cargo deny check` (settings in
+  `deny.toml`) and `zizmor` on the workflows.
 
 ## PRDs
 
