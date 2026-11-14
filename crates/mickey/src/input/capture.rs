@@ -347,8 +347,10 @@ impl Translator {
         // The touchpad's clock and typing state, computed before the
         // touchpad is borrowed mutably, so the borrows do not conflict.
         let now = self.start.elapsed();
-        let typing = self.typing_now();
         let is_syn = (raw.kind, raw.code) == (EV_SYN, SYN_REPORT);
+        // Only a touchpad's report, at the end of a frame, asks; the
+        // question is an ioctl on the keyboard, too costly for every event.
+        let typing = is_syn && self.touchpad.is_some() && self.typing_now();
 
         // Phase 1: feed the touchpad (if any) and collect what it produces.
         // The `if let` block borrows `self.touchpad` mutably; the borrow ends
