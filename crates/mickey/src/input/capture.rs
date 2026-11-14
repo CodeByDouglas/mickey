@@ -259,9 +259,14 @@ pub fn spawn_readers<T: From<InputEvent> + Send + 'static>(
                         // A timeout: no events, but time may have
                         // advanced enough to fire a tap's release.
                     }
+                    // A signal, or a passing failure of `poll` itself (out of
+                    // memory): wait a moment and ask again. Ending here would
+                    // stop the keyboard's reader, and with it the hotkey home,
+                    // while the keyboard is grabbed; a gone device ends at
+                    // its read instead.
                     Err(err) => {
                         if err.kind() != io::ErrorKind::Interrupted {
-                            return translator.let_go(&events);
+                            std::thread::sleep(Duration::from_millis(50));
                         }
                     }
                 }

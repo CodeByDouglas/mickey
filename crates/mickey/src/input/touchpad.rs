@@ -263,7 +263,11 @@ impl Touchpad {
             match self.last.replace(here) {
                 None => self.origin = here,
                 Some(last) => {
-                    let delta = [here[0] - last[0], here[1] - last[1]];
+                    // Saturating: a device may report any i32 at all.
+                    let delta = [
+                        here[0].saturating_sub(last[0]),
+                        here[1].saturating_sub(last[1]),
+                    ];
                     if self.jumped(delta) {
                         // Not movement: start again from here.
                         self.origin = here;
@@ -327,14 +331,20 @@ impl Touchpad {
     }
 
     fn jumped(&self, delta: [i32; 2]) -> bool {
-        (0..2).any(|axis| delta[axis].abs() > MAX_JUMP_MM * self.resolution[axis])
+        (0..2).any(|axis| {
+            delta[axis].saturating_abs() > MAX_JUMP_MM.saturating_mul(self.resolution[axis])
+        })
     }
 
     fn farther_than_a_tap(&self, here: [i32; 2]) -> bool {
         let tenths = |axis: usize| {
             i64::from(here[axis] - self.origin[axis]) * 10 / i64::from(self.resolution[axis])
         };
-        tenths(0).pow(2) + tenths(1).pow(2) > TAP_MOVE_TENTH_MM.pow(2)
+        // Saturating: a device may report coordinates far apart.
+        tenths(0)
+            .saturating_pow(2)
+            .saturating_add(tenths(1).saturating_pow(2))
+            > TAP_MOVE_TENTH_MM.pow(2)
     }
 
     /// One finger: the difference between two reports, scaled from
@@ -791,6 +801,15 @@ mod tests {
         pad.wait(80 + 180);
         assert_eq!(pad.buttons(), [(LEFT, true), (LEFT, false)]);
         assert_eq!(pad.touchpad.deadline(), None);
+    }
+
+    /// A device may report any value; none of them panics the reader.
+    #[test]
+    fn extreme_coordinates_do_not_overflow() {
+        let mut pad = Pad::new(settings());
+        for (at, x) in [(0, i32::MIN), (10, i32::MAX), (20, i32::MIN)] {
+            pad.frame(at, &[ONE, (EV_ABS, ABS_X, x), (EV_ABS, ABS_Y, i32::MAX)]);
+        }
     }
 
     #[test]

@@ -198,18 +198,45 @@ pub fn tf(key: &'static str, values: &[(&str, &str)]) -> String {
     fill(lookup(language(), key), values)
 }
 
+/// Puts each value at its `{name}`, in one pass over `text`: a value is
+/// never read again, so a peer named `{name}` shows as just that.
 fn fill(text: &str, values: &[(&str, &str)]) -> String {
-    let mut out = text.to_string();
-    for (name, value) in values {
-        out = out.replace(&format!("{{{name}}}"), value);
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        out += &rest[..open];
+        let after = &rest[open + 1..];
+        let value = after.find('}').and_then(|close| {
+            let name = &after[..close];
+            let (_, value) = values.iter().find(|(n, _)| *n == name)?;
+            Some((*value, close))
+        });
+        match value {
+            Some((value, close)) => {
+                out += value;
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push('{');
+                rest = after;
+            }
+        }
     }
-    out
+    out + rest
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn a_value_is_never_filled_in_again() {
+        let text = "{by} lets {name} in";
+        let values = [("by", "X{name}"), ("name", "Desk")];
+        assert_eq!(fill(text, &values), "X{name} lets Desk in");
+        assert_eq!(fill("{unknown} and {", &values), "{unknown} and {");
+    }
 
     /// The `{names}` a text asks for.
     fn placeholders(text: &str) -> BTreeSet<String> {
