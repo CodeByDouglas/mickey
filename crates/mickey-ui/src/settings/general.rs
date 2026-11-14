@@ -151,7 +151,9 @@ impl Settings {
         // Language: Auto follows the system; a chosen one applies at once.
         ui.label(i18n::t("general.language_label"));
         let mut current = form.language.clone();
-        let chosen = egui::ComboBox::from_id_salt("language")
+        // egui does not mark a `show_ui` combo box changed when an entry is
+        // picked (only `show_index` does), so compare the values instead.
+        egui::ComboBox::from_id_salt("language")
             .selected_text(language_label(&current))
             .show_ui(ui, |ui| {
                 ui.selectable_value(
@@ -162,10 +164,8 @@ impl Settings {
                 for lang in Lang::ALL {
                     ui.selectable_value(&mut current, lang.code().into(), lang.name());
                 }
-            })
-            .response
-            .changed();
-        if chosen && current != form.language {
+            });
+        if current != form.language {
             form.language = current.clone();
             // Apply at once: the next frame reads the new language.
             i18n::apply(&current);
