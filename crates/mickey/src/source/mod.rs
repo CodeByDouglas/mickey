@@ -284,7 +284,11 @@ pub fn run(
             Peer::new(peer.name, peer.address, key, start)
         })
         .collect();
-    let shared = Arc::new(Shared { identity, trusted });
+    let shared = Arc::new(Shared {
+        identity,
+        trusted,
+        pairing: Default::default(),
+    });
     // Every peer is connected on its own thread, asking to pair where
     // needed: one that hangs (frozen, or waiting for its owner to answer
     // a pair window) never holds up the others. Links arrive on `back`.
@@ -926,6 +930,10 @@ pub fn run(
                     "error: {address} was refused a moment ago; try again in {} s",
                     left.as_secs() + 1
                 )
+            } else if shared.pairing.lock_anyway().contains(&address) {
+                // Its first connection is still waiting for an answer: a
+                // second one would show a second window with another code.
+                format!("error: already pairing with {address}: answer the windows on both PCs")
             } else if let Some(index) = known.filter(|&i| peers[i].key.is_none()) {
                 // Listed but never paired (its code was refused, or it
                 // never answered): pair again, under the name it has.
