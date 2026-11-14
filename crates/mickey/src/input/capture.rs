@@ -12,11 +12,12 @@ use crate::input::event::InputEvent;
 use crate::input::touchpad::{ButtonMap, Moves, Settings, Touchpad};
 use crate::input::touchpad_prefs;
 use crate::platform::linux::{Device, RawEvent};
+use crate::threads::LockAnyway;
 use mickey_config as config;
 use std::io;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const EV_SYN: u16 = 0;
@@ -46,6 +47,9 @@ const FALLBACK_UNITS_PER_MM: i32 = 10;
 /// A tap is ignored for this long after a key was pressed (libinput's
 /// default is around 0.5 s; we keep it a touch longer for safety).
 const TYPING_WINDOW: Duration = Duration::from_millis(500);
+
+/// When a key was last pressed, on any of this PC's devices.
+type LastKey = Arc<Mutex<Option<Instant>>>;
 /// Wake an idle reader once a second so it never stalls on a gone device,
 /// and a touchpad with no events still sees its tap timers tick.
 const IDLE_WAKE: Duration = Duration::from_secs(1);
@@ -207,6 +211,7 @@ pub fn spawn_readers<T: From<InputEvent> + Send + 'static>(
     config: &config::Touchpad,
     keyboard: Option<Arc<Device>>,
 ) {
+    let last_key = LastKey::default();
     for found in devices {
         // A touchpad kept on this PC (`forward = false`) is not grabbed, so
         // the desktop already moves its cursor; reading it too would send
@@ -216,8 +221,8 @@ pub fn spawn_readers<T: From<InputEvent> + Send + 'static>(
         }
         let device = Arc::clone(&found.device);
         let events = events.clone();
-        let keyboard = keyboard.clone();
-        let mut translator = Translator::new(found, config, keyboard.clone());
+        let mut translator =
+            Translator::new(found, config, keyboard.clone(), Arc::clone(&last_key));
         let mut batch = Vec::with_capacity(64);
         crate::threads::spawn("capture", move || {
             loop {
@@ -239,7 +244,7 @@ pub fn spawn_readers<T: From<InputEvent> + Send + 'static>(
                             // Unplugged, or a Bluetooth mouse asleep: `wait`
                             // would keep saying it is readable and this loop
                             // would spin, so this reader ends, as before.
-                            Err(_) => return,
+                            Err(_) => return translator.let_go(&events),
                         }
                         for &raw in &batch {
                             translator.feed(raw, |event| {
@@ -256,7 +261,7 @@ pub fn spawn_readers<T: From<InputEvent> + Send + 'static>(
                     }
                     Err(err) => {
                         if err.kind() != io::ErrorKind::Interrupted {
-                            return;
+                            return translator.let_go(&events);
                         }
                     }
                 }
@@ -288,9 +293,9 @@ struct Translator {
     /// The reader's epoch, the same one the touchpad's `Duration` clock
     /// uses. Stored as an `Instant` so the monotonic clock is kept.
     start: Instant,
-    /// When a key was last pressed anywhere (this touchpad's own keys or the
-    /// shared keyboard), so `disable while typing` is decided locally.
-    last_key: Instant,
+    /// When a key was last pressed on any device, shared by every reader:
+    /// a touchpad has no keys, so only the keyboard's reader sees them.
+    last_key: LastKey,
     dx: i32,
     dy: i32,
     vertical: i32,
@@ -298,7 +303,12 @@ struct Translator {
 }
 
 impl Translator {
-    fn new(found: &Found, config: &config::Touchpad, keyboard: Option<Arc<Device>>) -> Translator {
+    fn new(
+        found: &Found,
+        config: &config::Touchpad,
+        keyboard: Option<Arc<Device>>,
+        last_key: LastKey,
+    ) -> Translator {
         let touchpad = (found.kind == Kind::Touchpad).then(|| {
             let settings = touchpad_settings(config, &found.name);
             Touchpad::new(found.resolution, settings)
@@ -308,7 +318,7 @@ impl Translator {
             touchpad,
             keyboard,
             start: Instant::now(),
-            last_key: Instant::now() - TYPING_WINDOW - Duration::from_secs(60),
+            last_key,
             dx: 0,
             dy: 0,
             vertical: 0,
@@ -321,12 +331,24 @@ impl Translator {
         self.start.elapsed()
     }
 
-    /// Whether typing was recent enough to silence taps. A key pressed on
-    /// this device refreshes `last_key` in `feed`; a key held on the shared
-    /// keyboard is caught here, at the cost of silencing taps while a
-    /// modifier is held (a known limitation, like libinput's timeout).
+    /// A reader that ends lets go of its touchpad's tap button, if one is
+    /// down, so the other PC does not keep it pressed.
+    fn let_go<T: From<InputEvent>>(&mut self, events: &Sender<T>) {
+        if let Some(touchpad) = self.touchpad.as_mut() {
+            touchpad.let_go(&mut |event| {
+                let _ = events.send(T::from(event));
+            });
+        }
+    }
+
+    /// Whether typing was recent enough to silence taps: a key pressed on
+    /// any device in the last `TYPING_WINDOW` (`feed` records it), or one
+    /// still held on the shared keyboard, at the cost of silencing taps
+    /// while a modifier is held (a known limitation, like libinput's).
     fn typing_now(&self) -> bool {
-        self.last_key.elapsed() < TYPING_WINDOW
+        self.last_key
+            .lock_anyway()
+            .is_some_and(|at| at.elapsed() < TYPING_WINDOW)
             || self
                 .keyboard
                 .as_ref()
@@ -339,8 +361,10 @@ impl Translator {
         let touchpad = self.touchpad.as_ref()?;
         let until = touchpad.deadline()?;
         let now = self.now();
-        // `until` is the touchpad's absolute clock; subtract our own.
-        until.checked_sub(now).filter(|d| !d.is_zero())
+        // `until` is the touchpad's absolute clock; subtract our own. One
+        // already past waits nothing (`Device::wait` makes it 1 ms), so the
+        // tap's button is let go now, not after a whole `IDLE_WAKE`.
+        Some(until.saturating_sub(now))
     }
 
     fn feed(&mut self, raw: RawEvent, mut out: impl FnMut(InputEvent)) {
@@ -393,8 +417,8 @@ impl Translator {
         let value = raw.value;
         // Track when a key was last pressed, for the touchpad's
         // `disable while typing`. Mouse buttons do not count.
-        if (raw.kind, raw.code).0 == EV_KEY && pressed && (raw.code < 0x100) {
-            self.last_key = Instant::now();
+        if raw.kind == EV_KEY && pressed && raw.code < 0x100 {
+            *self.last_key.lock_anyway() = Some(Instant::now());
         }
         match (raw.kind, raw.code) {
             (EV_KEY, code) if code < 0x100 => {
@@ -448,17 +472,24 @@ impl Translator {
 mod tests {
     use super::*;
 
-    fn run(hi_res_wheel: bool, raw: &[(u16, u16, i32)]) -> Vec<InputEvent> {
-        let mut translator = Translator {
-            hi_res_wheel,
+    fn translator(last_key: LastKey) -> Translator {
+        Translator {
+            hi_res_wheel: false,
             touchpad: None,
             keyboard: None,
             start: Instant::now(),
-            last_key: Instant::now() - TYPING_WINDOW - Duration::from_secs(60),
+            last_key,
             dx: 0,
             dy: 0,
             vertical: 0,
             horizontal: 0,
+        }
+    }
+
+    fn run(hi_res_wheel: bool, raw: &[(u16, u16, i32)]) -> Vec<InputEvent> {
+        let mut translator = Translator {
+            hi_res_wheel,
+            ..translator(LastKey::default())
         };
         let mut out = Vec::new();
         for &(kind, code, value) in raw {
@@ -468,6 +499,31 @@ mod tests {
     }
 
     const SYN: (u16, u16, i32) = (EV_SYN, SYN_REPORT, 0);
+
+    /// The keyboard's reader sees the key; the touchpad's must know too.
+    #[test]
+    fn a_key_typed_on_the_keyboard_counts_as_typing_for_the_touchpad() {
+        let shared = LastKey::default();
+        let mut keyboard = translator(Arc::clone(&shared));
+        let touchpad = translator(Arc::clone(&shared));
+        assert!(!touchpad.typing_now());
+        for value in [1, 0] {
+            keyboard.feed(
+                RawEvent {
+                    kind: EV_KEY,
+                    code: KEY_A,
+                    value,
+                },
+                |_| {},
+            );
+        }
+        assert!(
+            touchpad.typing_now(),
+            "still typing just after the key is let go"
+        );
+        *shared.lock_anyway() = Some(Instant::now() - TYPING_WINDOW);
+        assert!(!touchpad.typing_now(), "not once the window is over");
+    }
 
     #[test]
     fn keys_pass_through_and_repeats_are_presses() {

@@ -218,6 +218,17 @@ impl Touchpad {
         }
     }
 
+    /// Lets go of a tap's button if one is down: the reader is ending (the
+    /// touchpad was unplugged), and the other PC must not keep it pressed.
+    pub fn let_go(&mut self, out: &mut impl FnMut(InputEvent)) {
+        if let Tap::Tapped { button, .. } | Tap::Again { button, .. } | Tap::Drag { button } =
+            self.tap
+        {
+            out(button_event(button, false));
+        }
+        self.tap = Tap::Idle;
+    }
+
     /// Lets time pass with no event: ends a tap whose time is up.
     pub fn tick(&mut self, now: Duration, out: &mut impl FnMut(InputEvent)) {
         if let Tap::Tapped { button, until } = self.tap
@@ -780,6 +791,24 @@ mod tests {
         pad.wait(80 + 180);
         assert_eq!(pad.buttons(), [(LEFT, true), (LEFT, false)]);
         assert_eq!(pad.touchpad.deadline(), None);
+    }
+
+    #[test]
+    fn a_reader_that_ends_lets_go_of_a_tapped_button() {
+        let mut pad = Pad::new(settings());
+        tap(&mut pad, 0, ONE, 80);
+        assert_eq!(pad.buttons(), [(LEFT, true)]);
+        let out = &mut pad.out;
+        pad.touchpad.let_go(&mut |event| out.push(event));
+        assert_eq!(pad.buttons(), [(LEFT, true), (LEFT, false)]);
+        assert_eq!(pad.touchpad.deadline(), None, "nothing left to let go");
+        let out = &mut pad.out;
+        pad.touchpad.let_go(&mut |event| out.push(event));
+        assert_eq!(
+            pad.buttons().len(),
+            2,
+            "letting go twice sends nothing more"
+        );
     }
 
     #[test]
