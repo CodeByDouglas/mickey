@@ -50,7 +50,7 @@ pub fn this_pc() -> Result<Vec<Monitor>, String> {
 /// Whether this is GNOME or KDE, whose RemoteDesktop portal names the
 /// monitors (`XDG_CURRENT_DESKTOP` lists the desktop, e.g. `ubuntu:GNOME`).
 #[cfg(target_os = "linux")]
-fn portal_desktop() -> bool {
+pub fn portal_desktop() -> bool {
     is_portal_desktop(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default())
 }
 
