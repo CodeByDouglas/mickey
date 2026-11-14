@@ -55,6 +55,7 @@ pub fn target(
         );
     }
     let input_slots = SharedSlots::default();
+    let refused_said = std::sync::Mutex::new(None);
     // Every source learns when this PC's monitors move (#365).
     let monitors = monitors::keep_latest(std::time::Duration::from_secs(1));
     loop {
@@ -76,6 +77,7 @@ pub fn target(
             monitors: monitors.clone(),
         };
         let Some(slot) = Slot::take(&input_slots, peer.ip()) else {
+            slots::say_refused(&refused_said, peer.ip());
             continue;
         };
         crate::threads::try_spawn("serve source", move || {
@@ -86,9 +88,15 @@ pub fn target(
 }
 
 /// The sources driving this PC, by address: their input links, for what
-/// goes back to them outside `serve` (a pick in the switcher shown here).
-pub(super) type Sources =
-    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, secure::Link>>>;
+/// goes back to them outside `serve` (a pick in the switcher shown here),
+/// each with the number of the connection it came on, so an old connection
+/// that ends late cannot remove a newer one's link (#452).
+pub(super) type Sources = std::sync::Arc<
+    std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, (u64, secure::Link)>>,
+>;
+
+/// Numbers each accepted source connection, for `Sources`.
+static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// What every source's thread on the target shares.
 pub(super) struct Around {
@@ -144,7 +152,7 @@ pub(super) fn show_switcher_here(
         window::Outcome::Closed | window::Outcome::Failed(_) => u8::MAX,
     };
     let mut sources = sources.lock_anyway();
-    if let Some(link) = sources.get_mut(&from) {
+    if let Some((_, link)) = sources.get_mut(&from) {
         let _ = link.send(&protocol::Message::Picked { card });
     }
 }
@@ -207,8 +215,9 @@ pub(super) fn serve_source(
     }
     println!("mickey: source {peer} connected");
     // Kept so a switcher shown here can send the pick back to this source.
+    let this = CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if let Ok(clone) = link.try_clone() {
-        sources.lock_anyway().insert(peer.ip(), clone);
+        sources.lock_anyway().insert(peer.ip(), (this, clone));
     }
     let mut reported = false;
     // Asked per connection: monitors may have changed since the last one.
@@ -274,7 +283,16 @@ pub(super) fn serve_source(
         emit::cursor,
         || lock().is_trusted(&peer_key),
     );
-    sources.lock_anyway().remove(&peer.ip());
+    // Only its own: the source may have reconnected before this one
+    // noticed it was gone, and the new connection's link stays.
+    let mut sources_now = sources.lock_anyway();
+    if sources_now
+        .get(&peer.ip())
+        .is_some_and(|(id, _)| *id == this)
+    {
+        sources_now.remove(&peer.ip());
+    }
+    drop(sources_now);
     match result {
         Ok(()) => println!("mickey: source {peer} disconnected"),
         Err(err) => eprintln!("mickey: source {peer} dropped: {err}"),

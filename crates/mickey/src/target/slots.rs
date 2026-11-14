@@ -13,6 +13,25 @@ pub(super) const MAX_CONNECTIONS: usize = 32;
 /// the paired PCs from connecting.
 pub(super) const MAX_PER_ADDRESS: usize = 4;
 
+/// Says that a connection from `from` was refused for want of a slot, at
+/// most once a minute (`last`): silence made this hard to diagnose (#452),
+/// but a line per refusal would let anyone on the network flood the log.
+/// Says whether it logged.
+pub(super) fn say_refused(
+    last: &std::sync::Mutex<Option<std::time::Instant>>,
+    from: std::net::IpAddr,
+) -> bool {
+    let mut last = last.lock_anyway();
+    if last.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(60)) {
+        return false;
+    }
+    *last = Some(std::time::Instant::now());
+    eprintln!(
+        "mickey: refused a connection from {from}: too many open (at most {MAX_PER_ADDRESS} per address, {MAX_CONNECTIONS} in all); a silent one is let go after a few seconds"
+    );
+    true
+}
+
 /// A port's connections: how many, and how many from each address.
 #[derive(Default)]
 pub(super) struct Slots {
@@ -56,6 +75,17 @@ impl Drop for Slot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refusal_is_said_at_most_once_a_minute() {
+        let last = std::sync::Mutex::new(None);
+        let from: std::net::IpAddr = "192.0.2.66".parse().unwrap();
+        assert!(say_refused(&last, from), "the first refusal is logged");
+        assert!(
+            !say_refused(&last, from),
+            "the next ones that minute are not"
+        );
+    }
 
     #[test]
     fn one_address_cannot_take_every_slot() {
