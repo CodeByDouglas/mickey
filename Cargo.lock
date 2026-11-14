@@ -1772,6 +1772,7 @@ dependencies = [
  "snow",
  "wasapi",
  "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-wlr",
  "windows",
  "x11rb 0.14.0",

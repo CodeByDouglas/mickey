@@ -21,12 +21,44 @@ pub fn this_pc() -> Result<Vec<Monitor>, String> {
             Session::Portal => {}
         }
         let monitors = crate::desktop::portal::get().map(crate::desktop::portal::Portal::monitors);
-        monitors
-            .filter(|monitors| !monitors.is_empty())
-            .ok_or_else(|| {
-                "no Hyprland, and the RemoteDesktop portal named no monitors".to_string()
-            })
+        if let Some(monitors) = monitors.filter(|monitors| !monitors.is_empty()) {
+            return Ok(monitors);
+        }
+        // GNOME and KDE always have the RemoteDesktop portal, whose monitors
+        // match libei's regions; with none yet (the person has not answered
+        // its dialog), wait for it rather than take another layout.
+        if portal_desktop() {
+            return Err("the RemoteDesktop portal named no monitors yet".to_string());
+        }
+        // No RemoteDesktop portal (COSMIC, wlroots desktops other than Sway):
+        // Wayland's own xdg-output names them, in the same logical layout.
+        match crate::desktop::outputs::outputs() {
+            Ok(named) if !named.is_empty() => {
+                Ok(named.into_iter().map(|(_, monitor)| monitor).collect())
+            }
+            Ok(_) => Err(
+                "no Hyprland, and neither the RemoteDesktop portal nor xdg-output named a monitor"
+                    .to_string(),
+            ),
+            Err(err) => Err(format!(
+                "no Hyprland, the RemoteDesktop portal named no monitors, and xdg-output: {err}"
+            )),
+        }
     }
+}
+
+/// Whether this is GNOME or KDE, whose RemoteDesktop portal names the
+/// monitors (`XDG_CURRENT_DESKTOP` lists the desktop, e.g. `ubuntu:GNOME`).
+#[cfg(target_os = "linux")]
+fn portal_desktop() -> bool {
+    is_portal_desktop(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn is_portal_desktop(desktops: &str) -> bool {
+    desktops
+        .split(':')
+        .any(|desktop| desktop.eq_ignore_ascii_case("GNOME") || desktop.eq_ignore_ascii_case("KDE"))
 }
 
 /// Reads the monitors again every `every` on a thread of its own, and sends
@@ -95,6 +127,16 @@ pub fn keep_latest(every: std::time::Duration) -> Option<Latest> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn gnome_and_kde_wait_for_their_portal_others_ask_wayland() {
+        assert!(is_portal_desktop("GNOME"));
+        assert!(is_portal_desktop("ubuntu:GNOME"));
+        assert!(is_portal_desktop("KDE"));
+        assert!(!is_portal_desktop("COSMIC"));
+        assert!(!is_portal_desktop("river"));
+        assert!(!is_portal_desktop(""));
+    }
     use std::time::Duration;
 
     /// The owner's vertical monitor before and after it was moved down
