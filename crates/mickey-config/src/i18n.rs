@@ -298,21 +298,35 @@ mod tests {
     }
 
     /// The first string after each `t(` or `tf(` that is a call of ours
-    /// (not the end of a longer name like `format(`, `set(`).
+    /// (not the end of a longer name like `format(`, `set(`). rustfmt may
+    /// put the key on the next line, so blanks after `(` are skipped.
     fn keys_in(text: &str, used: &mut BTreeSet<String>) {
-        for call in ["t(\"", "tf(\"", "i18n::t(\"", "i18n::tf(\""] {
+        // Spelled in two parts so this very list is not taken for a call.
+        for call in [concat!("t", "("), concat!("tf", "(")] {
             for (at, _) in text.match_indices(call) {
                 let before = text[..at].chars().next_back();
-                let part_of_a_name =
-                    before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ':');
-                if call.starts_with("i18n") || !part_of_a_name {
-                    let rest = &text[at + call.len()..];
-                    if let Some(end) = rest.find('"') {
-                        used.insert(rest[..end].to_string());
-                    }
+                let part_of_a_name = before.is_some_and(|c| c.is_alphanumeric() || c == '_');
+                let ours =
+                    !part_of_a_name && (before != Some(':') || text[..at].ends_with("i18n::"));
+                let Some(rest) = text[at + call.len()..].trim_start().strip_prefix('"') else {
+                    continue;
+                };
+                if let (true, Some(end)) = (ours, rest.find('"')) {
+                    used.insert(rest[..end].to_string());
                 }
             }
         }
+    }
+
+    #[test]
+    fn keys_are_found_on_the_next_line_too() {
+        let mut used = BTreeSet::new();
+        keys_in(
+            "t(\"a.one\") tf(\n    \"a.two\",\n) i18n::t(\"a.three\") format(\"no\") x::t(\"no\")",
+            &mut used,
+        );
+        let found: Vec<&str> = used.iter().map(String::as_str).collect();
+        assert_eq!(found, ["a.one", "a.three", "a.two"]);
     }
 
     #[test]
