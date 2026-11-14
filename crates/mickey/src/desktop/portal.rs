@@ -125,6 +125,9 @@ impl Portal {
         let context = started
             .recv()
             .map_err(|_| "the portal thread ended".to_string())??;
+        // Nobody reads it again: dropped now, a session that ends during
+        // the wait for monitors below is logged by the thread (#454).
+        drop(started);
         let until = Instant::now() + FIRST_MONITORS;
         while shared.lock_anyway().monitors.is_empty() && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(20));
@@ -330,6 +333,8 @@ pub fn slide(monitors: &[Monitor], at: (i32, i32), (dx, dy): (i32, i32)) -> (i32
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn a_missing_portal_is_logged_once_per_reason() {
         let mut last = None;
@@ -343,8 +348,6 @@ mod tests {
         );
         assert!(is_new(&mut last, "the person said no"), "a new reason is");
     }
-
-    use super::*;
 
     fn screen(x: i32, y: i32, width: i32, height: i32) -> Monitor {
         Monitor {
