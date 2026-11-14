@@ -125,7 +125,7 @@ async fn watch(
 ) -> Result<(), String> {
     let text = |err: ashpd::Error| err.to_string();
     let capture = InputCapture::new().await.map_err(text)?;
-    let caps = Capabilities::Keyboard | Capabilities::Pointer;
+    let caps = Capabilities::KEYBOARD | Capabilities::POINTER;
     let session = match capture.create_session2(Default::default()).await {
         Ok(session) => {
             capture

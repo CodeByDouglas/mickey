@@ -205,7 +205,7 @@ async fn listen(
         .map_err(text)?;
     let token = token_path().and_then(|path| std::fs::read_to_string(path).ok());
     let options = SelectDevicesOptions::default()
-        .set_devices(DeviceType::Keyboard | DeviceType::Pointer)
+        .set_devices(DeviceType::KEYBOARD | DeviceType::POINTER)
         .set_persist_mode(PersistMode::ExplicitlyRevoked)
         .set_restore_token(token.as_deref());
     portal
