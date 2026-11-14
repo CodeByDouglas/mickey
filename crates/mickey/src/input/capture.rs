@@ -208,6 +208,12 @@ pub fn spawn_readers<T: From<InputEvent> + Send + 'static>(
     keyboard: Option<Arc<Device>>,
 ) {
     for found in devices {
+        // A touchpad kept on this PC (`forward = false`) is not grabbed, so
+        // the desktop already moves its cursor; reading it too would send
+        // the same motion to the other PC as well.
+        if found.kind == Kind::Touchpad && !found.forward {
+            continue;
+        }
         let device = Arc::clone(&found.device);
         let events = events.clone();
         let keyboard = keyboard.clone();
