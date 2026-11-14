@@ -85,21 +85,67 @@ pub fn place(x: i32, y: i32) -> io::Result<()> {
     crate::platform::windows::set_cursor_pos(x, y)
 }
 
+/// Who places and follows the cursor on this PC (#459).
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Path {
+    /// Its own IPC or server: Hyprland, X11, Sway.
+    Session(crate::desktop::Session),
+    /// The RemoteDesktop portal (GNOME, KDE).
+    Portal,
+    /// No portal yet on GNOME or KDE (its dialog unanswered): wait for it.
+    Wait,
+    /// No portal at all (COSMIC on the 24.04 ISO): the absolute pointer.
+    Absolute,
+}
+
+/// The path for `session`, given whether its RemoteDesktop portal is up
+/// and whether this is GNOME or KDE, which always have one.
+#[cfg(target_os = "linux")]
+fn path(session: crate::desktop::Session, portal_up: bool, portal_desktop: bool) -> Path {
+    use crate::desktop::Session;
+    match session {
+        Session::Portal if portal_up => Path::Portal,
+        Session::Portal if portal_desktop => Path::Wait,
+        Session::Portal => Path::Absolute,
+        other => Path::Session(other),
+    }
+}
+
+/// This PC's path, with its portal when that is the one.
+#[cfg(target_os = "linux")]
+fn here() -> (Path, Option<&'static crate::desktop::portal::Portal>) {
+    let session = crate::desktop::session();
+    let portal = (session == crate::desktop::Session::Portal)
+        .then(crate::desktop::portal::get)
+        .flatten();
+    (
+        path(session, portal.is_some(), crate::monitors::portal_desktop()),
+        portal,
+    )
+}
+
 /// Puts this PC's cursor at `x, y` of its desktop. uinput moves are
 /// relative, so Hyprland places it (PRD 0005 *Discoveries*).
 #[cfg(target_os = "linux")]
 pub fn place(x: i32, y: i32) -> io::Result<()> {
     use crate::desktop::Session;
     use crate::desktop::hyprland;
-    match crate::desktop::session() {
-        Session::X11 => return crate::desktop::x11::place(x, y).map_err(io::Error::other),
-        Session::Sway => return crate::desktop::sway::place(x, y).map_err(io::Error::other),
-        Session::Portal => {
-            return crate::desktop::portal::get()
-                .ok_or_else(|| io::Error::other("no RemoteDesktop portal to place the cursor"))?
-                .place(x, y);
+    match here() {
+        (Path::Session(Session::X11), _) => {
+            return crate::desktop::x11::place(x, y).map_err(io::Error::other);
         }
-        Session::Hyprland => {}
+        (Path::Session(Session::Sway), _) => {
+            return crate::desktop::sway::place(x, y).map_err(io::Error::other);
+        }
+        (Path::Portal, Some(portal)) => return portal.place(x, y),
+        (Path::Absolute, _) => return crate::desktop::absolute::place(x, y),
+        (Path::Wait | Path::Portal, _) => {
+            return Err(io::Error::other(
+                "no RemoteDesktop portal to place the cursor",
+            ));
+        }
+        (Path::Session(_), _) => {}
     }
     // A Lua config (Hyprland 0.55+) takes Lua; the older config language
     // takes the plain dispatcher. Try the first, then the second.
@@ -127,11 +173,13 @@ pub fn cursor() -> Option<(i32, i32)> {
 #[cfg(target_os = "linux")]
 pub fn cursor() -> Option<(i32, i32)> {
     use crate::desktop::Session;
-    match crate::desktop::session() {
-        Session::Hyprland => crate::desktop::hyprland::cursor().ok(),
-        Session::X11 => crate::desktop::x11::cursor().ok(),
-        Session::Sway => crate::desktop::sway::cursor(),
-        Session::Portal => crate::desktop::portal::get()?.cursor(),
+    match here() {
+        (Path::Session(Session::Hyprland), _) => crate::desktop::hyprland::cursor().ok(),
+        (Path::Session(Session::X11), _) => crate::desktop::x11::cursor().ok(),
+        (Path::Session(Session::Sway), _) => crate::desktop::sway::cursor(),
+        (Path::Portal, portal) => portal?.cursor(),
+        (Path::Absolute, _) => crate::desktop::absolute::cursor(),
+        (Path::Wait | Path::Session(Session::Portal), _) => None,
     }
 }
 
@@ -181,17 +229,14 @@ impl Emitter {
                 if dx == 0 && dy == 0 {
                     return Ok(());
                 }
-                // Sway, or the portal: absolute moves, so Mickey knows
-                // where the cursor is (PRD 0004, #178).
-                match crate::desktop::session() {
-                    crate::desktop::Session::Sway => {
+                // Sway, the portal or the absolute pointer: absolute moves,
+                // so Mickey knows where the cursor is (PRD 0004, #178, #459).
+                match here() {
+                    (Path::Session(crate::desktop::Session::Sway), _) => {
                         return crate::desktop::sway::move_by(dx, dy).map_err(io::Error::other);
                     }
-                    crate::desktop::Session::Portal => {
-                        if let Some(portal) = crate::desktop::portal::get() {
-                            return portal.move_by(dx, dy);
-                        }
-                    }
+                    (Path::Portal, Some(portal)) => return portal.move_by(dx, dy),
+                    (Path::Absolute, _) => return crate::desktop::absolute::move_by(dx, dy),
                     _ => {}
                 }
                 if dx != 0 {
@@ -226,6 +271,40 @@ impl Emitter {
     /// Puts the cursor at `x, y` of the desktop, where it came in.
     pub fn place(&mut self, x: i32, y: i32) -> io::Result<()> {
         place(x, y)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod path_tests {
+    use super::*;
+    use crate::desktop::Session;
+
+    /// Which way each desktop places the cursor: the new absolute pointer
+    /// only where there is no portal and the desktop is not GNOME or KDE.
+    #[test]
+    fn each_desktop_keeps_its_way_and_only_portal_less_ones_go_absolute() {
+        let cases = [
+            // (session, portal up, GNOME or KDE) -> path
+            (
+                Session::Hyprland,
+                false,
+                false,
+                Path::Session(Session::Hyprland),
+            ),
+            (Session::X11, false, false, Path::Session(Session::X11)),
+            (Session::Sway, false, false, Path::Session(Session::Sway)),
+            (Session::Portal, true, true, Path::Portal),
+            (Session::Portal, true, false, Path::Portal),
+            (Session::Portal, false, true, Path::Wait),
+            (Session::Portal, false, false, Path::Absolute),
+        ];
+        for (session, portal_up, portal_desktop, expected) in cases {
+            assert_eq!(
+                path(session, portal_up, portal_desktop),
+                expected,
+                "{session:?}, portal up: {portal_up}, GNOME or KDE: {portal_desktop}"
+            );
+        }
     }
 }
 

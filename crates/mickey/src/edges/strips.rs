@@ -7,9 +7,10 @@
 //!
 //! A strip arms only once the cursor has left it: coming home, Mickey puts
 //! the cursor back on the edge's last pixel, under the strip, and that
-//! must not send it straight back. Sway answers that placing with a leave
-//! and an enter, so an enter just after Mickey placed the cursor does not
-//! count either (`PLACED_LATELY`).
+//! must not send it straight back. Sway, and the absolute pointer where
+//! there is no portal (#459), answer that placing with an enter, so an
+//! enter just after Mickey placed the cursor does not count either
+//! (`PLACED_LATELY`).
 
 use crate::edges::Line;
 use crate::monitors::Monitor;
@@ -65,7 +66,7 @@ pub fn start(
     strips.apply(&handle);
     let display = connection.display();
     let waker = handle.clone();
-    crate::threads::spawn("sway edges", move || {
+    crate::threads::spawn("edge strips", move || {
         while queue.blocking_dispatch(&mut strips).is_ok() {}
     });
     // A sync's answer wakes the thread, which then applies `wanted`.
@@ -419,7 +420,9 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Strips {
                 let Some(edge) = strips.edges.iter().find(|edge| edge.surface == surface) else {
                     return;
                 };
-                if !strips.armed || crate::desktop::sway::placed_within(PLACED_LATELY) {
+                let placed = crate::desktop::sway::placed_within(PLACED_LATELY)
+                    || crate::desktop::absolute::placed_within(PLACED_LATELY);
+                if !strips.armed || placed {
                     strips.armed = false;
                     return;
                 }
