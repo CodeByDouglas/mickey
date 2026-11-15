@@ -250,8 +250,9 @@ own cursor while the keyboard and mouse go elsewhere.
 ## Internationalisation
 
 Every text the owner reads lives in a TOML catalogue under
-`mickey-config/locales/`: `en.toml` (the reference, with every key) and
-`pt-PT.toml` (Português de Portugal). A language that lacks a key falls
+`mickey-config/locales/`: `en.toml` (the reference, with every key),
+`pt-BR.toml` (Português do Brasil) and `pt-PT.toml` (Português de
+Portugal). A language that lacks a key falls
 back to English; a typo shows up as the key itself. `i18n::t("key")`
 fetches one; `i18n::tf("key", &[("name", value)])` fills `{name}`
 placeholders.

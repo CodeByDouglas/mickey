@@ -19,18 +19,20 @@ use std::sync::atomic::{AtomicU8, Ordering};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     En,
+    PtBr,
     PtPt,
 }
 
 impl Lang {
     /// Every language Mickey is translated into, in the order the
     /// settings list them.
-    pub const ALL: [Lang; 2] = [Lang::En, Lang::PtPt];
+    pub const ALL: [Lang; 3] = [Lang::En, Lang::PtBr, Lang::PtPt];
 
     /// The code written in config.toml and used in locale names.
     pub fn code(self) -> &'static str {
         match self {
             Lang::En => "en",
+            Lang::PtBr => "pt-BR",
             Lang::PtPt => "pt-PT",
         }
     }
@@ -39,6 +41,7 @@ impl Lang {
     pub fn name(self) -> &'static str {
         match self {
             Lang::En => "English",
+            Lang::PtBr => "Português (Brasil)",
             Lang::PtPt => "Português (Portugal)",
         }
     }
@@ -92,9 +95,8 @@ impl Lang {
             .unwrap_or(Lang::En)
     }
 
-    /// `pt_PT.UTF-8`, `pt-PT`, `pt_AO@euro`, `en_GB`... Portuguese other
-    /// than Brazil's is European Portuguese; `pt_BR` is another dialect,
-    /// not translated yet, so it is not matched.
+    /// `pt_PT.UTF-8`, `pt-PT`, `pt_AO@euro`, `en_GB`... `pt_BR` is
+    /// Brazilian Portuguese; any other Portuguese is European Portuguese.
     fn from_locale(locale: &str) -> Option<Lang> {
         let base = locale.split(['.', '@']).next()?;
         let normalized = normalize(base);
@@ -102,7 +104,11 @@ impl Lang {
             return Some(Lang::En);
         }
         if normalized == "pt" || normalized.starts_with("pt-") {
-            return (normalized != "pt-br").then_some(Lang::PtPt);
+            return Some(if normalized == "pt-br" {
+                Lang::PtBr
+            } else {
+                Lang::PtPt
+            });
         }
         None
     }
@@ -111,6 +117,7 @@ impl Lang {
         match self {
             Lang::En => 0,
             Lang::PtPt => 1,
+            Lang::PtBr => 2,
         }
     }
 
@@ -124,6 +131,7 @@ impl Lang {
     fn catalog_text(self) -> &'static str {
         match self {
             Lang::En => include_str!("../locales/en.toml"),
+            Lang::PtBr => include_str!("../locales/pt-BR.toml"),
             Lang::PtPt => include_str!("../locales/pt-PT.toml"),
         }
     }
@@ -175,7 +183,8 @@ fn load(text: &str) -> Catalog {
 }
 
 fn catalog(lang: Lang) -> &'static Catalog {
-    static CATALOGS: [OnceLock<Catalog>; 2] = [OnceLock::new(), OnceLock::new()];
+    static CATALOGS: [OnceLock<Catalog>; Lang::ALL.len()] =
+        [const { OnceLock::new() }; Lang::ALL.len()];
     CATALOGS[usize::from(lang.index())].get_or_init(|| load(lang.catalog_text()))
 }
 
@@ -285,12 +294,14 @@ mod tests {
     }
 
     #[test]
-    fn portuguese_has_every_text_english_has() {
-        let missing: Vec<&String> = catalog(Lang::En)
-            .keys()
-            .filter(|key| !catalog(Lang::PtPt).contains_key(*key))
-            .collect();
-        assert!(missing.is_empty(), "pt-PT lacks {missing:?}");
+    fn every_language_has_every_text_english_has() {
+        for lang in Lang::ALL {
+            let missing: Vec<&String> = catalog(Lang::En)
+                .keys()
+                .filter(|key| !catalog(lang).contains_key(*key))
+                .collect();
+            assert!(missing.is_empty(), "{} lacks {missing:?}", lang.code());
+        }
     }
 
     /// Every catalogue call in the code names a text that exists, and every
@@ -391,9 +402,10 @@ mod tests {
         );
         // ...unless the locale is C.
         assert_eq!(env(Some("C"), None, Some("pt_PT"), None), Lang::En);
-        // Brazilian Portuguese is not translated yet.
-        assert_eq!(env(None, None, None, Some("pt_BR.UTF-8")), Lang::En);
-        assert_eq!(env(None, None, Some("pt_BR:pt_PT"), None), Lang::PtPt);
+        // Brazilian Portuguese has its own catalogue.
+        assert_eq!(env(None, None, Some("pt_BR:pt_PT"), None), Lang::PtBr);
+        assert_eq!(env(None, None, None, Some("pt_BR.UTF-8")), Lang::PtBr);
+        assert_eq!(Lang::from_code("pt-br"), Some(Lang::PtBr));
     }
 
     #[test]
