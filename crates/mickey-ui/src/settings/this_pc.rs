@@ -75,6 +75,13 @@ impl Settings {
             ));
             ui.add(egui::Slider::new(&mut form.touchpad.speed, 1..=200));
         });
+        touchpad_choice(ui, i18n::t("this_pc.touchpad_tap"), &mut form.touchpad.tap);
+        touchpad_choice(
+            ui,
+            i18n::t("this_pc.touchpad_natural"),
+            &mut form.touchpad.natural_scroll,
+        );
+        ui.weak(i18n::t("this_pc.touchpad_hint"));
         ui.add_space(12.0);
         sound(ui, form, self.own_key.as_deref());
         ui.add_space(10.0);
@@ -86,4 +93,19 @@ impl Settings {
             ui.weak(i18n::t("this_pc.listen_hint"));
         });
     }
+}
+
+/// One touchpad choice: as the desktop says, or on or off whatever it says.
+fn touchpad_choice(ui: &mut egui::Ui, label: &str, value: &mut mickey_config::Auto) {
+    use mickey_config::Auto;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        for (choice, text) in [
+            (Auto::Auto, i18n::t("this_pc.touchpad_auto")),
+            (Auto::On, i18n::t("this_pc.touchpad_on")),
+            (Auto::Off, i18n::t("this_pc.touchpad_off")),
+        ] {
+            ui.radio_value(value, choice, text);
+        }
+    });
 }

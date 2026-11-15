@@ -311,7 +311,7 @@ Mickey's log says what it is doing (never which keys you press):
 - **Touchpad:** while it controls another PC, Mickey reads the touchpad
   itself: motion, two-finger scroll, taps (one finger left, two right,
   three middle) and tap-and-drag. Tap to click and natural scrolling follow
-  GNOME's or KDE's own settings; on other desktops set them under
+  GNOME's, KDE's or Hyprland's own settings, or the This PC tab; elsewhere set them under
   `[touchpad]` in `config.toml` (taps are off until you do). A click on a
   clickpad is always a left click: right-click with a two-finger tap.
 - **Windows' secure screens** (lock screen, UAC prompt, `Ctrl+Alt+Del`)
