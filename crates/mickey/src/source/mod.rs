@@ -392,12 +392,20 @@ pub fn run(
     let mut asked: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     // Which peers were online when the group map was last shared.
     let mut shared_with: Vec<bool> = Vec::new();
-    // Kept up to date by `monitor_changes`, or on GNOME and KDE read again
-    // while the portal is not up yet (below).
-    let mut this_pc = monitors::this_pc().unwrap_or_else(|err| {
-        eprintln!("mickey: {err}; `mickey peers` will not show this PC's monitors");
+    // Kept up to date by `monitor_changes`. Without Hyprland, Sway or X11
+    // (`follows_changes` is false), read off this loop until found: on GNOME
+    // and KDE the first read waits for the RemoteDesktop dialog (#457).
+    let mut this_pc = if monitors::follows_changes() {
+        monitors::this_pc().unwrap_or_else(|err| {
+            eprintln!("mickey: {err}; `mickey peers` will not show this PC's monitors");
+            Vec::new()
+        })
+    } else {
         Vec::new()
-    });
+    };
+    #[cfg(target_os = "linux")]
+    let first_monitors = (!monitors::follows_changes())
+        .then(|| monitors::first_found(PING_EVERY, monitors::this_pc));
     // Where the cursor is, asked on a thread of its own: on Hyprland the
     // answer took 2.7 ms at p99, and this loop must not wait for it (#187).
     let edge = edges::EdgeWatch::start(this_pc.clone(), crate::input::cursor_now);
@@ -594,9 +602,12 @@ pub fn run(
                 crate::desktop::Session::Portal | crate::desktop::Session::Sway
             )
         {
-            // The portal may come up after Mickey at login.
+            // Found off this loop (the portal may come up after Mickey at
+            // login, and its dialog may stay open a while).
             if this_pc.is_empty()
-                && let Ok(found) = monitors::this_pc()
+                && let Some(found) = first_monitors
+                    .as_ref()
+                    .and_then(|first| first.try_recv().ok())
             {
                 this_pc = found;
             }
