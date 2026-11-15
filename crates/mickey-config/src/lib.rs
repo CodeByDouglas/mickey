@@ -53,7 +53,7 @@ natural_scroll = "auto"    # auto (ask the desktop), on or off
 
 [interface]
 switcher_position = "bottom-right"   # or center, top-left, top-right, bottom-left
-language = "auto"                    # or en, pt-PT
+language = "auto"                    # or en, pt-BR, pt-PT
 
 [this_pc]
 controls_others = true     # send this PC's keyboard and mouse to the peers

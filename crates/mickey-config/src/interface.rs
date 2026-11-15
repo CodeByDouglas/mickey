@@ -17,7 +17,7 @@ pub struct Interface {
     #[serde(default)]
     pub switcher_order: Vec<String>,
     /// The language of Mickey's windows and tray menu: `auto` (the
-    /// system's), or a code from `i18n::Lang::ALL` such as `en`, `pt-PT`.
+    /// system's), or a code from `i18n::Lang::ALL` such as `en`, `pt-BR`, `pt-PT`.
     #[serde(default = "default_language")]
     pub language: String,
 }
