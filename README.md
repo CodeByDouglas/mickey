@@ -144,7 +144,7 @@ in the download folder checks what you got.
 | Linux Mint 22.3 | Cinnamon (X11) | screen edges work |
 | Fedora 44 | KDE Plasma (Wayland) | screen edges work, in a test VM |
 | Debian 13 | GNOME (Wayland) | no tray icon without an extension ([why](#known-limits)) |
-| Pop!_OS 24.04 | COSMIC (Wayland) | no screen edges: use the hotkeys ([why](#known-limits)) |
+| Pop!_OS 24.04 | COSMIC (Wayland) | screen edges both ways, in a test VM, one monitor ([details](#known-limits)) |
 | Xubuntu 24.04 | XFCE (X11) | |
 | openSUSE Tumbleweed | KDE Plasma (Wayland) | install, start, firewall and discovery checked |
 | Ubuntu 24.04 | Sway 1.9 (Wayland), headless | screen edges both ways, against GNOME in the same VM |
@@ -301,10 +301,15 @@ Mickey's log says what it is doing (never which keys you press):
   p99 under 40 ms) have not been checked: no cable was at hand.
 - **Screen edges on Sway** were checked in a test VM only (a headless
   Sway), not on a real Sway desktop yet. Other wlroots compositors (river,
-  labwc, Wayfire) have no screen edges: use the hotkeys and the switcher.
-- **No screen edges on COSMIC** (Pop!_OS 24.04): its portal has no
-  InputCapture yet, which Mickey needs to see the pointer reach an edge.
-  The hotkeys and the switcher work; edges will once COSMIC adds it (#429).
+  labwc, Wayfire) get them the same way, through one-pixel strips on the
+  edges, but have not been tried.
+- **COSMIC** (Pop!_OS 24.04) has no InputCapture portal, so Mickey watches
+  its edges through one-pixel strips instead (#429); where its portal has
+  no RemoteDesktop either, as on the 24.04 ISO, a COSMIC PC being
+  controlled places and follows the cursor through an absolute virtual
+  pointer (#459). Both ways were checked in a test VM, on one monitor
+  only. The controlled side gets no pointer acceleration, as on GNOME and
+  KDE when controlled.
 - **The switcher on GNOME (Wayland)** opens without a title bar, but where
   GNOME puts it, not in the chosen corner: GNOME lets no program place a
   window. On KDE Plasma and Hyprland it goes to its corner.
