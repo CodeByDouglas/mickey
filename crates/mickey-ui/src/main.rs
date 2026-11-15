@@ -16,6 +16,7 @@ mod place;
 mod settings;
 mod snap;
 mod theme;
+mod whats_new;
 
 use choice::Choice;
 use eframe::egui;
@@ -248,6 +249,9 @@ fn main() -> ExitCode {
     }
     if args.first().map(String::as_str) == Some("history") {
         return history::window();
+    }
+    if args.first().map(String::as_str) == Some("whats-new") {
+        return whats_new::window();
     }
     if let [command, who, code] = args.as_slice()
         && command == "pair"

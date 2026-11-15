@@ -265,3 +265,9 @@ recorded_double = "Gravado: toque duplo em {key}"
 not_keys_double = "Foram teclas em conjunto; toca duas vezes numa tecla aqui."
 double_in_chord = "Isso foi um toque duplo; pertence à linha Toque duplo."
 could_not_record = "Não foi possível gravar: {err}"
+
+[whats_new]
+window_title = "Mickey {version}: novidades"
+heading = "O que há de novo no Mickey {version}"
+close = "Fechar"
+all_releases = "Todas as versões"

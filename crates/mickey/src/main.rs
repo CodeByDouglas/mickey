@@ -23,6 +23,7 @@ mod target;
 mod threads;
 mod tray;
 mod update;
+mod whats_new;
 mod window;
 
 fn main() {

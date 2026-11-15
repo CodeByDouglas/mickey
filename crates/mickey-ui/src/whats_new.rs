@@ -1,0 +1,112 @@
+//! The "What's new" window: the part of CHANGELOG.md for this version,
+//! shown once by `mickey run` after an update (or from the tray). The
+//! changelog is built into the program, so it always matches the version
+//! running and needs no internet.
+
+use crate::i18n;
+use eframe::egui;
+use std::process::ExitCode;
+
+const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
+
+/// The lines under `## {version}` in `changelog`, up to the next `## `.
+fn notes<'a>(changelog: &'a str, version: &str) -> Option<&'a str> {
+    let heading = format!("## {version}\n");
+    let start = changelog.find(&heading)? + heading.len();
+    let rest = &changelog[start..];
+    let end = rest.find("\n## ").map_or(rest.len(), |at| at + 1);
+    Some(rest[..end].trim())
+}
+
+/// Shows this version's notes, if the changelog has them.
+pub fn window() -> ExitCode {
+    let version = env!("CARGO_PKG_VERSION");
+    let Some(notes) = notes(CHANGELOG, version) else {
+        eprintln!("mickey-ui: no notes for {version} in the changelog");
+        return ExitCode::from(1);
+    };
+    let options = eframe::NativeOptions {
+        viewport: crate::theme::viewport()
+            .with_title(i18n::tf("whats_new.window_title", &[("version", version)]))
+            .with_app_id("mickey-whats-new")
+            .with_inner_size([520.0, 420.0]),
+        ..Default::default()
+    };
+    let result = eframe::run_native(
+        "mickey-whats-new",
+        options,
+        Box::new(|creation| {
+            crate::theme::apply(&creation.egui_ctx);
+            Ok(Box::new(WhatsNew { version, notes }))
+        }),
+    );
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("mickey-ui: cannot open a window: {err}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+struct WhatsNew {
+    version: &'static str,
+    notes: &'static str,
+}
+
+impl eframe::App for WhatsNew {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ui, |ui| {
+            ui.heading(i18n::tf("whats_new.heading", &[("version", self.version)]));
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical()
+                .max_height(ui.available_height() - 40.0)
+                .show(ui, |ui| {
+                    // The changelog is in English; its lines are shown as
+                    // written, a "- " item per paragraph.
+                    for item in self.notes.split("\n- ") {
+                        let text = item.trim_start_matches("- ").replace("\n  ", " ");
+                        ui.label(format!("•  {}", text.trim()));
+                        ui.add_space(6.0);
+                    }
+                });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button(i18n::t("whats_new.close")).clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                ui.hyperlink_to(
+                    i18n::t("whats_new.all_releases"),
+                    "https://github.com/EduardoMG12/mickey/releases",
+                );
+            });
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: &str = "# What's new\n\nIntro.\n\n## Unreleased\n\n- Next.\n\n## 0.5.0\n\n- Taps click.\n- Edges on\n  COSMIC.\n\n## 0.4.5\n\n- Older.\n";
+
+    #[test]
+    fn a_versions_notes_end_at_the_next_heading() {
+        assert_eq!(
+            notes(SAMPLE, "0.5.0"),
+            Some("- Taps click.\n- Edges on\n  COSMIC.")
+        );
+        assert_eq!(notes(SAMPLE, "0.4.5"), Some("- Older."));
+        assert_eq!(
+            notes(SAMPLE, "0.4"),
+            None,
+            "not a prefix of another version"
+        );
+        assert_eq!(notes(SAMPLE, "9.9.9"), None);
+    }
+
+    #[test]
+    fn the_real_changelog_has_an_unreleased_section() {
+        assert!(notes(CHANGELOG, "Unreleased").is_some());
+    }
+}
