@@ -89,6 +89,31 @@ pub fn watch(
     changes
 }
 
+/// Reads the monitors every `every` on a thread of its own until a read
+/// names at least one, sends them once and stops. For GNOME and KDE, where
+/// the first read waits for the person to answer the RemoteDesktop dialog:
+/// the source's main loop must keep pinging meanwhile, or the other PCs
+/// let it go after 10 s of silence (#457).
+#[cfg(target_os = "linux")]
+pub fn first_found(
+    every: std::time::Duration,
+    read: fn() -> Result<Vec<Monitor>, String>,
+) -> std::sync::mpsc::Receiver<Vec<Monitor>> {
+    let (found, first) = std::sync::mpsc::channel();
+    crate::threads::spawn("monitors at last", move || {
+        loop {
+            if let Ok(monitors) = read()
+                && !monitors.is_empty()
+            {
+                let _ = found.send(monitors);
+                return;
+            }
+            std::thread::sleep(every);
+        }
+    });
+    first
+}
+
 /// Whether this PC's monitors can be read again while Mickey runs: on
 /// Windows and Hyprland. Not on GNOME and KDE: each read goes through the
 /// RemoteDesktop portal, which reports them once per session, and reading
@@ -158,6 +183,33 @@ mod tests {
             1 => Err("the compositor did not answer".into()),
             _ => Ok(vec![AFTER]),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    static SLOW_READS: AtomicUsize = AtomicUsize::new(0);
+
+    /// The portal not up yet, then up with no monitors, then with one.
+    #[cfg(target_os = "linux")]
+    fn portal_answers_late() -> Result<Vec<Monitor>, String> {
+        match SLOW_READS.fetch_add(1, Ordering::SeqCst) {
+            0 => Err("the RemoteDesktop portal named no monitors yet".into()),
+            1 => Ok(Vec::new()),
+            _ => Ok(vec![BEFORE]),
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_first_monitors_found_are_sent_once_then_reading_stops() {
+        let first = first_found(Duration::from_millis(1), portal_answers_late);
+        assert_eq!(first.recv_timeout(Duration::from_secs(1)), Ok(vec![BEFORE]));
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            SLOW_READS.load(Ordering::SeqCst),
+            3,
+            "no read after the first found"
+        );
+        assert!(first.recv_timeout(Duration::from_millis(50)).is_err());
     }
 
     #[test]
