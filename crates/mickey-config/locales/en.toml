@@ -264,3 +264,9 @@ recorded_double = "Recorded: double tap {key}"
 not_keys_double = "That was keys together; tap one key twice here."
 double_in_chord = "That was a double tap; it belongs in the Double tap row."
 could_not_record = "Could not record: {err}"
+
+[whats_new]
+window_title = "Mickey {version}: what's new"
+heading = "What's new in Mickey {version}"
+close = "Close"
+all_releases = "Every release"
