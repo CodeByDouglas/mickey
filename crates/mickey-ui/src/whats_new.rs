@@ -10,12 +10,13 @@ use std::process::ExitCode;
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 
 /// The lines under `## {version}` in `changelog`, up to the next `## `.
-fn notes<'a>(changelog: &'a str, version: &str) -> Option<&'a str> {
-    let heading = format!("## {version}\n");
-    let start = changelog.find(&heading)? + heading.len();
-    let rest = &changelog[start..];
-    let end = rest.find("\n## ").map_or(rest.len(), |at| at + 1);
-    Some(rest[..end].trim())
+/// Line by line, so Windows' `\r\n` (a Windows checkout) reads the same.
+fn notes(changelog: &str, version: &str) -> Option<String> {
+    let heading = format!("## {version}");
+    let mut lines = changelog.lines().map(str::trim_end);
+    lines.find(|line| *line == heading)?;
+    let section: Vec<&str> = lines.take_while(|line| !line.starts_with("## ")).collect();
+    Some(section.join("\n").trim().to_string())
 }
 
 /// Shows this version's notes, if the changelog has them.
@@ -51,7 +52,7 @@ pub fn window() -> ExitCode {
 
 struct WhatsNew {
     version: &'static str,
-    notes: &'static str,
+    notes: String,
 }
 
 impl eframe::App for WhatsNew {
@@ -92,17 +93,22 @@ mod tests {
 
     #[test]
     fn a_versions_notes_end_at_the_next_heading() {
+        let notes = |version| notes(SAMPLE, version);
         assert_eq!(
-            notes(SAMPLE, "0.5.0"),
+            notes("0.5.0").as_deref(),
             Some("- Taps click.\n- Edges on\n  COSMIC.")
         );
-        assert_eq!(notes(SAMPLE, "0.4.5"), Some("- Older."));
-        assert_eq!(
-            notes(SAMPLE, "0.4"),
-            None,
-            "not a prefix of another version"
-        );
-        assert_eq!(notes(SAMPLE, "9.9.9"), None);
+        assert_eq!(notes("0.4.5").as_deref(), Some("- Older."));
+        assert_eq!(notes("0.4"), None, "not a prefix of another version");
+        assert_eq!(notes("9.9.9"), None);
+    }
+
+    /// A Windows checkout turns every `\n` into `\r\n`.
+    #[test]
+    fn windows_line_endings_read_the_same() {
+        let windows = SAMPLE.replace('\n', "\r\n");
+        assert!(notes(&windows, "0.5.0").is_some());
+        assert_eq!(notes(&windows, "0.5.0"), notes(SAMPLE, "0.5.0"));
     }
 
     #[test]
