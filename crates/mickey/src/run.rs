@@ -366,6 +366,9 @@ fn run_from_config() -> Result<(), String> {
     let this_pc = &config.this_pc;
     // Let the other PCs find this one, and hear them (PRD 0010). Without
     // it Mickey still works with the addresses in config.toml.
+    // Just updated: show what changed, once. Before the identity is made,
+    // so a first install is told apart.
+    crate::whats_new::after_update(&identity::data_dir()?);
     let identity = identity::Identity::load_or_create(&identity::data_dir()?)?;
     let me = discovery::Announce {
         name: this_pc.name(),

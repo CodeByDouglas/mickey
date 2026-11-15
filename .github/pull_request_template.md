@@ -41,3 +41,4 @@
 - [ ] New dependency? Justified in the Summary: what it does and why the standard library is not enough
 - [ ] AI assistance: none / some / most (I read and understand every line)
 - [ ] Docs, or the PRD's *Discoveries*, updated if behaviour changed
+- [ ] People will notice the change? A line under `## Unreleased` in [CHANGELOG.md](../CHANGELOG.md), in plain words

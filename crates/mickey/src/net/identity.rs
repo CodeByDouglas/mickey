@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// The Noise protocol the secure link speaks.
 pub const NOISE_PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const KEY_LEN: usize = 32;
-const FILE_NAME: &str = "identity";
+pub const FILE_NAME: &str = "identity";
 /// 160 bits of the hash: 32 base32 characters.
 const FINGERPRINT_BYTES: usize = 20;
 const BASE32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
