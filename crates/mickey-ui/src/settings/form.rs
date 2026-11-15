@@ -55,7 +55,11 @@ pub struct Form {
     pub since: u64,
     /// The switcher's custom order, by name; empty: as the layout goes.
     pub order: Vec<String>,
-    pub speed: i32,
+    /// `[touchpad]` as read, kept whole: the window edits only its speed,
+    /// and saving must not drop the rest (`forward`, `tap`...).
+    pub touchpad: config::Touchpad,
+    /// The interface language: `auto`, or a code from `i18n::Lang::ALL`.
+    pub language: String,
 }
 
 impl Form {
@@ -103,7 +107,8 @@ impl Form {
             muted: config.audio.muted.clone(),
             since: config.audio.since,
             order: config.interface.switcher_order.clone(),
-            speed: config.touchpad.speed,
+            touchpad: config.touchpad.clone(),
+            language: config.interface.language.clone(),
         }
     }
 
@@ -195,6 +200,14 @@ impl Form {
                 .collect();
             out += &format!("switcher_order = [{}]\n", names.join(", "));
         }
+        // Always written: `auto` is the default, but the owner's choice
+        // survives a save.
+        if self.language != "auto" {
+            out += &format!(
+                "language = {}    # or auto (the system's)\n",
+                config::toml_string(&self.language)
+            );
+        }
         let audio = Audio {
             listener: self.listener.clone(),
             mode: self.mode,
@@ -222,8 +235,28 @@ impl Form {
         if !self.check_updates {
             out += "\n[updates]\ncheck = false    # never ask GitHub for a newer Mickey\n";
         }
+        let touchpad = &self.touchpad;
+        let default = config::Touchpad::default();
         out += "\n[touchpad]\n";
-        out += &format!("speed = {}    # higher is faster\n", self.speed);
+        out += &format!("speed = {}    # higher is faster\n", touchpad.speed);
+        if touchpad.scroll_speed != default.scroll_speed {
+            out += &format!(
+                "scroll_speed = {}    # two-finger scroll; higher is faster\n",
+                touchpad.scroll_speed
+            );
+        }
+        if !touchpad.forward {
+            out += "forward = false    # the touchpad stays on this PC\n";
+        }
+        if touchpad.tap != default.tap {
+            out += &format!("tap = \"{}\"    # tap to click\n", touchpad.tap.as_str());
+        }
+        if touchpad.natural_scroll != default.natural_scroll {
+            out += &format!(
+                "natural_scroll = \"{}\"\n",
+                touchpad.natural_scroll.as_str()
+            );
+        }
         out
     }
 }
@@ -235,7 +268,7 @@ mod tests {
     #[test]
     fn what_the_form_writes_parses_back_to_the_same_form() {
         let original = config::parse(
-            "[[peer]]\nname = \"Windows \\\"main\\\"\"\naddress = \"192.0.2.10:4242\"\nhotkey = \"AltGr+RightShift+1\"\nposition = [-1920, 0]\nkey = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n\n[hotkeys]\nhome = \"AltGr+RightShift+H\"\n\n[interface]\nswitcher_position = \"top-left\"\n\n[clipboard]\nhistory = false\nshare = \"off\"\n\n[updates]\ncheck = false\n\n[audio]\nlistener = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\nmode = \"both\"\n\n[this_pc]\ncontrolled = false\nshare_hotkeys = false\nname = \"Desk\"\n",
+            "[[peer]]\nname = \"Windows \\\"main\\\"\"\naddress = \"192.0.2.10:4242\"\nhotkey = \"AltGr+RightShift+1\"\nposition = [-1920, 0]\nkey = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n\n[hotkeys]\nhome = \"AltGr+RightShift+H\"\n\n[interface]\nswitcher_position = \"top-left\"\n\n[clipboard]\nhistory = false\nshare = \"off\"\n\n[updates]\ncheck = false\n\n[audio]\nlistener = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\nmode = \"both\"\n\n[this_pc]\ncontrolled = false\nshare_hotkeys = false\nname = \"Desk\"\n\n[touchpad]\nspeed = 30\nscroll_speed = 10\nforward = false\ntap = \"on\"\nnatural_scroll = \"off\"\n",
         )
         .unwrap();
         let form = Form::from_config(&original);
@@ -244,6 +277,10 @@ mod tests {
         assert!(
             reread.clipboard.history == Some(false),
             "the history setting survives a save"
+        );
+        assert_eq!(
+            reread.touchpad, original.touchpad,
+            "every touchpad setting survives a save, not only the speed"
         );
         assert_eq!(
             reread.clipboard.share,

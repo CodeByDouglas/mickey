@@ -2,6 +2,7 @@
 
 use super::Settings;
 use super::sound::sound;
+use crate::i18n;
 use eframe::egui;
 
 impl Settings {
@@ -13,29 +14,33 @@ impl Settings {
             .num_columns(2)
             .spacing([16.0, 12.0])
             .show(ui, |ui| {
-                ui.label(format!("{}  Name", icon::LAPTOP));
+                ui.label(format!("{}  {}", icon::LAPTOP, i18n::t("this_pc.name")));
                 ui.add(
                     egui::TextEdit::singleline(&mut form.name)
-                        .hint_text("the computer's name")
+                        .hint_text(i18n::t("this_pc.name_hint"))
                         .desired_width(260.0),
                 );
                 ui.end_row();
-                ui.label(format!("{}  Fingerprint", icon::SHIELD));
+                ui.label(format!(
+                    "{}  {}",
+                    icon::SHIELD,
+                    i18n::t("this_pc.fingerprint")
+                ));
                 ui.label(egui::RichText::new(&self.fingerprint).monospace().weak());
                 ui.end_row();
             });
         ui.add_space(10.0);
         ui.checkbox(
             &mut form.controls_others,
-            "Control other PCs with this keyboard and mouse",
+            i18n::t("this_pc.controls_others"),
         );
-        ui.checkbox(&mut form.controlled, "Let paired PCs control this one");
+        ui.checkbox(&mut form.controlled, i18n::t("this_pc.controlled"));
         let mut wanted = self.autostart;
         let busy = self.autostart_change.is_some();
         let changed = ui
             .add_enabled(
                 !busy,
-                egui::Checkbox::new(&mut wanted, "Start Mickey when this PC starts"),
+                egui::Checkbox::new(&mut wanted, i18n::t("this_pc.autostart")),
             )
             .changed();
         if changed {
@@ -57,24 +62,50 @@ impl Settings {
             self.autostart = crate::mickey::ask(&["autostart", "status"])
                 .is_ok_and(|answer| answer.trim() == "on");
             if let Err(err) = answer {
-                self.message = format!("Could not change starting with this PC: {err}");
+                self.message = i18n::tf("settings.autostart_failed", &[("err", &err.to_string())]);
             }
         }
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().slider_width = 220.0;
-            ui.label(format!("{}  Touchpad speed", icon::LAPTOP));
-            ui.add(egui::Slider::new(&mut form.speed, 1..=200));
+            ui.label(format!(
+                "{}  {}",
+                icon::LAPTOP,
+                i18n::t("this_pc.touchpad_speed")
+            ));
+            ui.add(egui::Slider::new(&mut form.touchpad.speed, 1..=200));
         });
+        touchpad_choice(ui, i18n::t("this_pc.touchpad_tap"), &mut form.touchpad.tap);
+        touchpad_choice(
+            ui,
+            i18n::t("this_pc.touchpad_natural"),
+            &mut form.touchpad.natural_scroll,
+        );
+        ui.weak(i18n::t("this_pc.touchpad_hint"));
         ui.add_space(12.0);
         sound(ui, form, self.own_key.as_deref());
         ui.add_space(10.0);
-        egui::CollapsingHeader::new("Advanced").show(ui, |ui| {
+        egui::CollapsingHeader::new(i18n::t("this_pc.advanced")).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(format!("{}  Listen on", icon::LINK));
+                ui.label(format!("{}  {}", icon::LINK, i18n::t("this_pc.listen_on")));
                 ui.add(egui::TextEdit::singleline(&mut form.listen).desired_width(200.0));
             });
-            ui.weak("Where the other PCs connect. 0.0.0.0:4242 (every network of this PC) suits almost everyone.");
+            ui.weak(i18n::t("this_pc.listen_hint"));
         });
     }
+}
+
+/// One touchpad choice: as the desktop says, or on or off whatever it says.
+fn touchpad_choice(ui: &mut egui::Ui, label: &str, value: &mut mickey_config::Auto) {
+    use mickey_config::Auto;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        for (choice, text) in [
+            (Auto::Auto, i18n::t("this_pc.touchpad_auto")),
+            (Auto::On, i18n::t("this_pc.touchpad_on")),
+            (Auto::Off, i18n::t("this_pc.touchpad_off")),
+        ] {
+            ui.radio_value(value, choice, text);
+        }
+    });
 }
