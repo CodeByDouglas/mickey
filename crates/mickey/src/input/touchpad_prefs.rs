@@ -3,9 +3,10 @@
 //! controlled the way they do on this one.
 //!
 //! libinput settings live in the compositor, not in the device: GNOME
-//! keeps them in GSettings, KDE in `kcminputrc`. Other desktops (sway,
-//! Hyprland, Xfce...) keep them in their own files, which Mickey does not
-//! read; there `[touchpad]` in config.toml says what to do.
+//! keeps them in GSettings, KDE in `kcminputrc`, Hyprland answers
+//! `hyprctl getoption`. Other desktops (sway, Xfce...) keep them in their
+//! own files, which Mickey does not read; there `[touchpad]` in
+//! config.toml says what to do.
 
 use crate::input::touchpad::ButtonMap;
 use std::process::{Command, Stdio};
@@ -52,7 +53,41 @@ pub fn detect(device: &str) -> Detected {
             ..parse_kcminputrc(&text.unwrap_or_default(), device)
         };
     }
+    if has("hyprland") {
+        return Detected {
+            source: Some("hyprctl"),
+            ..parse_hyprland(|option| run("hyprctl", &["-j", "getoption", option]))
+        };
+    }
     Detected::default()
+}
+
+/// Hyprland's `input:touchpad:*` options, each asked of `hyprctl -j
+/// getoption`, which answers `{"option": ..., "bool": true, "set": ...}`
+/// (or `"str"` for the button map). The global values only: a
+/// per-device block in hyprland.conf is not seen.
+fn parse_hyprland(ask: impl Fn(&str) -> Option<String>) -> Detected {
+    let value = |option: &str| -> Option<serde_json::Value> {
+        serde_json::from_str(&ask(&format!("input:touchpad:{option}"))?).ok()
+    };
+    let flag = |option: &str| value(option)?.get("bool")?.as_bool();
+    let button_map = value("tap_button_map").and_then(|answer| {
+        match answer.get("str")?.as_str()? {
+            "lrm" => Some(ButtonMap::Lrm),
+            "lmr" => Some(ButtonMap::Lmr),
+            // "[[EMPTY]]": not set, libinput's default.
+            _ => None,
+        }
+    });
+    Detected {
+        tap: flag("tap-to-click"),
+        tap_and_drag: flag("tap-and-drag"),
+        button_map,
+        natural_scroll: flag("natural_scroll"),
+        two_finger_scroll: None,
+        disable_while_typing: flag("disable_while_typing"),
+        source: None,
+    }
 }
 
 fn kcminputrc() -> Option<std::path::PathBuf> {
@@ -190,6 +225,36 @@ pub fn parse_kcminputrc(text: &str, device: &str) -> Detected {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hyprland_options_are_read_from_hyprctl() {
+        // What `hyprctl -j getoption` printed on a real Hyprland session.
+        let answers = |option: &str| -> Option<String> {
+            let answer = match option {
+                "input:touchpad:natural_scroll" => r#"{"option": "x", "bool": true, "set": true }"#,
+                "input:touchpad:tap-to-click" => r#"{"option": "x", "bool": true, "set": true }"#,
+                "input:touchpad:tap-and-drag" => r#"{"option": "x", "bool": false, "set": true }"#,
+                "input:touchpad:tap_button_map" => r#"{"option": "x", "str": "lmr", "set": true }"#,
+                // Not answered: hyprctl missing or too old.
+                _ => return None,
+            };
+            Some(answer.to_string())
+        };
+        let found = parse_hyprland(answers);
+        assert_eq!(found.natural_scroll, Some(true));
+        assert_eq!(found.tap, Some(true));
+        assert_eq!(found.tap_and_drag, Some(false));
+        assert_eq!(found.button_map, Some(ButtonMap::Lmr));
+        assert_eq!(found.disable_while_typing, None, "not answered: unknown");
+        let unset = parse_hyprland(|_| {
+            Some(r#"{"option": "x", "str": "[[EMPTY]]", "set": false }"#.into())
+        });
+        assert_eq!(unset.button_map, None, "an unset map is libinput's default");
+        assert_eq!(
+            parse_hyprland(|_| Some("garbage".into())),
+            Detected::default()
+        );
+    }
 
     #[test]
     fn gnome_settings_are_read_as_they_are() {
