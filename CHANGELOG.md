@@ -11,6 +11,8 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
+## 0.5.0
+
 - Taps and two-finger scrolling on a laptop's touchpad now work while it
   controls another PC, following GNOME's, KDE's or Hyprland's touchpad
   settings. Settings > This PC sets tap to click and natural scrolling by
