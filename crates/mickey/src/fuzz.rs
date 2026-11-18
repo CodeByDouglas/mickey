@@ -169,6 +169,39 @@ fn clipboard() {
     );
 }
 
+fn transfer() {
+    use crate::transfer::offer::{Entry, Kind, Offer};
+    use crate::transfer::wire::{self, Message};
+    let entry = |path: &str, kind| Entry {
+        path: path.into(),
+        kind,
+    };
+    let messages = [
+        Message::Offer(Offer {
+            id: 42,
+            entries: vec![
+                entry("fotos", Kind::Folder),
+                entry("fotos/praia.jpg", Kind::File { size: 1 << 33 }),
+            ],
+        }),
+        Message::Fetch {
+            offer: 42,
+            index: 1,
+            from: 0,
+        },
+        Message::File { index: 1, size: 9 },
+    ];
+    let seeds: Vec<Vec<u8>> = messages.iter().map(wire::encode).collect();
+    hammer(
+        "transfer (transfer::wire::decode)",
+        rounds(20_000),
+        &seeds,
+        |bytes| {
+            let _ = wire::decode(bytes);
+        },
+    );
+}
+
 fn group_map() {
     let member = |n: u8, port: u16| Member {
         key: [n; 32],
@@ -240,6 +273,7 @@ fn audio() {
 fn every_decoder_survives_mangled_and_random_bytes() {
     input_link();
     clipboard();
+    transfer();
     group_map();
     discovery();
     audio();
