@@ -676,6 +676,66 @@ mod tests {
         );
     }
 
+    /// Bytes `i % 251` from where it is: read it to make them, write to it
+    /// to check them, so a long stream is tested without holding it.
+    struct Pattern(u64);
+
+    impl io::Read for Pattern {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            for byte in buf.iter_mut() {
+                *byte = (self.0 % 251) as u8;
+                self.0 += 1;
+            }
+            Ok(buf.len())
+        }
+    }
+
+    impl io::Write for Pattern {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            for &byte in buf {
+                if byte != (self.0 % 251) as u8 {
+                    return Err(io::Error::other(format!("byte {} is wrong", self.0)));
+                }
+                self.0 += 1;
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_stream_bigger_than_a_bulk_payload_crosses_the_data_link() {
+        let (ours, theirs) = data_link(Identity::generate().unwrap(), true);
+        let (mut ours, mut theirs) = (ours.unwrap(), theirs.unwrap());
+        let length = crate::net::secure::MAX_BULK as u64 + 3_000_001;
+        let sender = thread::spawn(move || ours.send_stream(Pattern(0), length));
+        let mut checked = Pattern(0);
+        theirs.recv_stream(&mut checked, length).unwrap();
+        sender.join().unwrap().unwrap();
+        assert_eq!(checked.0, length);
+    }
+
+    #[test]
+    fn a_source_that_ends_early_is_an_error() {
+        let (ours, _theirs) = data_link(Identity::generate().unwrap(), true);
+        let err = ours.unwrap().send_stream(&b"abc"[..], 10).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn a_stream_longer_than_announced_writes_nothing() {
+        let (ours, theirs) = data_link(Identity::generate().unwrap(), true);
+        let (mut ours, mut theirs) = (ours.unwrap(), theirs.unwrap());
+        ours.send_stream(&[7u8; 10][..], 10).unwrap();
+        let mut sink = Vec::new();
+        let err = theirs.recv_stream(&mut sink, 5).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(sink.is_empty());
+    }
+
     #[test]
     fn a_pc_not_paired_gets_no_data_link() {
         let (_, theirs) = data_link(Identity::generate().unwrap(), false);

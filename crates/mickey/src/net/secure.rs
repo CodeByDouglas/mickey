@@ -124,7 +124,8 @@ impl Link {
     }
 
     /// Sends `bytes` whole, on a data link (PRD 0011): never on the input
-    /// link, where it would hold key presses behind it.
+    /// link, where it would hold key presses behind it. Its length goes
+    /// first, in a message of its own, then the bytes as a stream.
     pub fn send_bulk(&mut self, bytes: &[u8]) -> io::Result<()> {
         if bytes.len() > MAX_BULK {
             return Err(invalid(format!(
@@ -133,30 +134,19 @@ impl Link {
             )));
         }
         let length = (bytes.len() as u32).to_be_bytes();
-        let mut sealed = vec![0u8; BULK_CHUNK + TAG_LEN];
+        // One lock for both: another sender's message between the length
+        // and the bytes would be read as part of the payload.
         let mut noise = self.noise.lock_anyway();
-        for piece in std::iter::once(&length[..]).chain(bytes.chunks(BULK_CHUNK)) {
-            let len = noise
-                .write_message(piece, &mut sealed)
-                .map_err(noise_error)?;
-            write_noise(&mut self.stream, &sealed[..len])?;
-        }
-        Ok(())
+        // Four bytes are always one message, as the reader expects.
+        seal_stream(&mut self.stream, &mut noise, &length[..], 4)?;
+        seal_stream(&mut self.stream, &mut noise, bytes, bytes.len() as u64)
     }
 
     /// Reads one payload sent with `send_bulk`.
     pub fn recv_bulk(&mut self) -> io::Result<Vec<u8>> {
         let mut sealed = vec![0u8; BULK_CHUNK + TAG_LEN];
         let mut plain = vec![0u8; BULK_CHUNK + TAG_LEN];
-        let mut open = |stream: &mut TcpStream, plain: &mut [u8]| -> io::Result<usize> {
-            let len = read_noise(stream, &mut sealed)?;
-            self.noise
-                .lock_anyway()
-                .read_message(&sealed[..len], plain)
-                .map_err(noise_error)
-        };
-        let mut stream = self.stream.try_clone()?;
-        let header = open(&mut stream, &mut plain)?;
+        let header = self.open(&mut sealed, &mut plain)?;
         let length: [u8; 4] = plain[..header]
             .try_into()
             .map_err(|_| invalid("a bulk payload must start with its length".into()))?;
@@ -170,14 +160,49 @@ impl Link {
         // length: a peer could announce 64 MiB on every link and send
         // nothing.
         let mut payload = Vec::with_capacity(length.min(1 << 20));
-        while payload.len() < length {
-            let got = open(&mut stream, &mut plain)?;
-            if got == 0 || payload.len() + got > length {
-                return Err(invalid("a bulk payload does not match its length".into()));
-            }
-            payload.extend_from_slice(&plain[..got]);
-        }
+        self.recv_stream(&mut payload, length as u64)?;
         Ok(payload)
+    }
+
+    /// Sends exactly `length` bytes read from `source`, in Noise messages
+    /// of up to 64 KB, so memory stays the same whatever the size (PRD
+    /// 0015). The peer must already know `length`: it calls `recv_stream`
+    /// with the same number. A `source` that ends early is an error.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "file transfers send with it from #474 on")
+    )]
+    pub fn send_stream(&mut self, source: impl Read, length: u64) -> io::Result<()> {
+        let mut noise = self.noise.lock_anyway();
+        seal_stream(&mut self.stream, &mut noise, source, length)
+    }
+
+    /// Writes exactly `length` bytes from the peer's `send_stream` into
+    /// `sink`. A message that would go past `length` is an error: the
+    /// peer never makes this side write more than it announced.
+    pub fn recv_stream(&mut self, mut sink: impl Write, length: u64) -> io::Result<()> {
+        let mut sealed = vec![0u8; BULK_CHUNK + TAG_LEN];
+        let mut plain = vec![0u8; BULK_CHUNK + TAG_LEN];
+        let mut left = length;
+        while left > 0 {
+            let got = self.open(&mut sealed, &mut plain)?;
+            if got == 0 || got as u64 > left {
+                return Err(invalid("a stream does not match its length".into()));
+            }
+            sink.write_all(&plain[..got])?;
+            left -= got as u64;
+        }
+        Ok(())
+    }
+
+    /// Reads and decrypts one message into `plain`; returns its length.
+    /// Only the decryption holds the lock, never the blocking read.
+    fn open(&mut self, sealed: &mut [u8], plain: &mut [u8]) -> io::Result<usize> {
+        let len = read_noise(&mut self.stream, sealed)?;
+        self.noise
+            .lock_anyway()
+            .read_message(&sealed[..len], plain)
+            .map_err(noise_error)
     }
 
     /// `writes[i]` says whether this side sends handshake message `i`.
@@ -353,6 +378,28 @@ fn builder(identity: &Identity) -> io::Result<snow::Builder<'_>> {
     snow::Builder::new(params)
         .local_private_key(identity.private())
         .map_err(noise_error)
+}
+
+/// `send_stream` with the lock already held.
+fn seal_stream(
+    stream: &mut TcpStream,
+    noise: &mut TransportState,
+    mut source: impl Read,
+    length: u64,
+) -> io::Result<()> {
+    let mut plain = vec![0u8; BULK_CHUNK];
+    let mut sealed = vec![0u8; BULK_CHUNK + TAG_LEN];
+    let mut left = length;
+    while left > 0 {
+        let piece = &mut plain[..left.min(BULK_CHUNK as u64) as usize];
+        source.read_exact(piece)?;
+        let len = noise
+            .write_message(piece, &mut sealed)
+            .map_err(noise_error)?;
+        write_noise(stream, &sealed[..len])?;
+        left -= piece.len() as u64;
+    }
+    Ok(())
 }
 
 /// Messages up to this size (every input event) go out as one write.
