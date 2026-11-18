@@ -9,6 +9,7 @@ mod control;
 mod desktop;
 mod edges;
 mod focus;
+mod fs;
 #[cfg(test)]
 mod fuzz;
 mod hex;
