@@ -52,3 +52,14 @@ _Avoid_: login, registration
 **Trusted peer**:
 A peer whose key was paired. Only trusted peers' input is ever emitted.
 _Avoid_: friend, allowed host
+
+**Offer**:
+What a peer announces about the files copied on it: their relative paths,
+sizes and an ID, without the content. Another peer fetches files by the
+offer's ID and a file's index, never by path.
+_Avoid_: manifest, listing
+
+**Transfer**:
+Fetching the files of an offer from one peer to another: streamed,
+verified file by file, resumable.
+_Avoid_: upload, download, sync
