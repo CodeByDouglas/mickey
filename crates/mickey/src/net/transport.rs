@@ -718,6 +718,52 @@ mod tests {
         assert_eq!(checked.0, length);
     }
 
+    /// A `Pattern` that stops after its first megabyte until `open` says
+    /// so (or fails after five seconds).
+    struct Gate {
+        pattern: Pattern,
+        open: std::sync::mpsc::Receiver<()>,
+    }
+
+    impl io::Read for Gate {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.pattern.0 == 1 << 20 {
+                self.open
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .map_err(|_| io::Error::other("the peer was not heard"))?;
+            }
+            let room = if self.pattern.0 < 1 << 20 {
+                buf.len().min((1 << 20) - self.pattern.0 as usize)
+            } else {
+                buf.len()
+            };
+            self.pattern.read(&mut buf[..room])
+        }
+    }
+
+    #[test]
+    fn the_peer_is_heard_in_the_middle_of_a_stream() {
+        let (ours, theirs) = data_link(Identity::generate().unwrap(), true);
+        let (mut ours, mut theirs) = (ours.unwrap(), theirs.unwrap());
+        let mut listening = ours.try_clone().unwrap();
+        let (heard, open) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            assert_eq!(listening.recv_bulk().unwrap(), b"cancel");
+            heard.send(()).unwrap();
+        });
+        // The stream waits for the peer's message to be read: if it held
+        // the lock throughout, that message could never be decrypted.
+        let source = Gate {
+            pattern: Pattern(0),
+            open,
+        };
+        let length = 2 << 20;
+        let sender = thread::spawn(move || ours.send_stream(source, length));
+        theirs.send_bulk(b"cancel").unwrap();
+        theirs.recv_stream(Pattern(0), length).unwrap();
+        sender.join().unwrap().unwrap();
+    }
+
     #[test]
     fn a_source_that_ends_early_is_an_error() {
         let (ours, _theirs) = data_link(Identity::generate().unwrap(), true);

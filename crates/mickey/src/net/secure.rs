@@ -137,9 +137,10 @@ impl Link {
         // One lock for both: another sender's message between the length
         // and the bytes would be read as part of the payload.
         let mut noise = self.noise.lock_anyway();
+        let mut encrypt = |plain: &[u8], sealed: &mut [u8]| noise.write_message(plain, sealed);
         // Four bytes are always one message, as the reader expects.
-        seal_stream(&mut self.stream, &mut noise, &length[..], 4)?;
-        seal_stream(&mut self.stream, &mut noise, bytes, bytes.len() as u64)
+        seal_stream(&mut self.stream, &length[..], 4, &mut encrypt)?;
+        seal_stream(&mut self.stream, bytes, bytes.len() as u64, &mut encrypt)
     }
 
     /// Reads one payload sent with `send_bulk`.
@@ -168,13 +169,19 @@ impl Link {
     /// of up to 64 KB, so memory stays the same whatever the size (PRD
     /// 0015). The peer must already know `length`: it calls `recv_stream`
     /// with the same number. A `source` that ends early is an error.
+    ///
+    /// The lock is taken for each message, not the whole stream, so the
+    /// peer's messages (a cancel, a "still here") still decrypt meanwhile.
+    /// No other thread may send on this link until it returns.
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "file transfers send with it from #474 on")
     )]
     pub fn send_stream(&mut self, source: impl Read, length: u64) -> io::Result<()> {
-        let mut noise = self.noise.lock_anyway();
-        seal_stream(&mut self.stream, &mut noise, source, length)
+        let noise = &self.noise;
+        seal_stream(&mut self.stream, source, length, |plain, sealed| {
+            noise.lock_anyway().write_message(plain, sealed)
+        })
     }
 
     /// Writes exactly `length` bytes from the peer's `send_stream` into
@@ -380,12 +387,13 @@ fn builder(identity: &Identity) -> io::Result<snow::Builder<'_>> {
         .map_err(noise_error)
 }
 
-/// `send_stream` with the lock already held.
+/// Sends exactly `length` bytes of `source`, each piece encrypted by
+/// `encrypt` (which says how the lock is held) and written in order.
 fn seal_stream(
     stream: &mut TcpStream,
-    noise: &mut TransportState,
     mut source: impl Read,
     length: u64,
+    mut encrypt: impl FnMut(&[u8], &mut [u8]) -> Result<usize, snow::Error>,
 ) -> io::Result<()> {
     let mut plain = vec![0u8; BULK_CHUNK];
     let mut sealed = vec![0u8; BULK_CHUNK + TAG_LEN];
@@ -393,9 +401,7 @@ fn seal_stream(
     while left > 0 {
         let piece = &mut plain[..left.min(BULK_CHUNK as u64) as usize];
         source.read_exact(piece)?;
-        let len = noise
-            .write_message(piece, &mut sealed)
-            .map_err(noise_error)?;
+        let len = encrypt(piece, &mut sealed).map_err(noise_error)?;
         write_noise(stream, &sealed[..len])?;
         left -= piece.len() as u64;
     }
