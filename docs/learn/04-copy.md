@@ -86,13 +86,13 @@ refuses a bigger announced length and pieces that do not add up.
   goes away.
 - [`clipboard/mod.rs:31`](../../crates/mickey/src/clipboard/mod.rs#L31): even the
   `Debug` print of `Content` shows only `text, 12 bytes`.
-- [`clipboard/received.rs:66`](../../crates/mickey/src/clipboard/received.rs#L66) `save`:
+- [`clipboard/received.rs:32`](../../crates/mickey/src/clipboard/received.rs#L32) `save`:
   received files land in a fresh folder under the cache, the last five
   kept. A name from the network that could leave the folder (`..`, a
   slash, `CON`) is refused, never "cleaned up"
-  ([`:18`](../../crates/mickey/src/clipboard/received.rs#L18)). On Windows they get
+  ([`fs/names.rs:10`](../../crates/mickey/src/fs/names.rs#L10)). On Windows they get
   the Mark of the Web, like a download
-  ([`:42`](../../crates/mickey/src/clipboard/received.rs#L42)).
+  ([`fs/mark.rs:7`](../../crates/mickey/src/fs/mark.rs#L7)).
 
 ## The history (`history.rs`, `clipboard/watch.rs`)
 
