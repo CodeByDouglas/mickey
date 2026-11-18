@@ -92,7 +92,7 @@ pub fn list(roots: &[PathBuf]) -> Result<Listing, String> {
     let mut listing = Listing::default();
     let mut seen = HashSet::new();
     // Last in, first out: pushed in reverse to come out in order.
-    let mut pending: Vec<(PathBuf, String)> = roots
+    let mut pending: Vec<(PathBuf, Result<String, String>)> = roots
         .iter()
         .rev()
         .map(|root| (root.clone(), name_of(root)))
@@ -101,14 +101,20 @@ pub fn list(roots: &[PathBuf]) -> Result<Listing, String> {
         if listing.entries.len() == MAX_ENTRIES {
             return Err(format!("more than {MAX_ENTRIES} files and folders"));
         }
+        let path = match path {
+            Ok(path) if path::checked(&path).is_ok() => path,
+            Ok(shown) | Err(shown) => {
+                listing.skipped.push(Skipped {
+                    path: shown,
+                    why: Why::BadName,
+                });
+                continue;
+            }
+        };
         let skip = |why| Skipped {
             path: path.clone(),
             why,
         };
-        if path::checked(&path).is_err() {
-            listing.skipped.push(skip(Why::BadName));
-            continue;
-        }
         let Ok(metadata) = std::fs::symlink_metadata(&local) else {
             listing.skipped.push(skip(Why::Unreadable));
             continue;
@@ -137,7 +143,10 @@ pub fn list(roots: &[PathBuf]) -> Result<Listing, String> {
                 continue;
             };
             let below = names.into_iter().rev();
-            pending.extend(below.map(|(child, name)| (child, format!("{path}/{name}"))));
+            pending.extend(below.map(|(child, name)| {
+                let under = |name| format!("{path}/{name}");
+                (child, name.map(under).map_err(under))
+            }));
         }
         listing.local.push((local, metadata.modified().ok()));
         listing.entries.push(Entry { path, kind });
@@ -147,21 +156,32 @@ pub fn list(roots: &[PathBuf]) -> Result<Listing, String> {
 
 /// A folder's entries, sorted by name so offers come out the same way
 /// every time.
-fn children(folder: &Path) -> Option<Vec<(PathBuf, String)>> {
-    let mut names: Vec<(PathBuf, String)> = std::fs::read_dir(folder)
+fn children(folder: &Path) -> Option<Vec<(PathBuf, Result<String, String>)>> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(folder)
         .ok()?
         .flatten()
-        .map(|entry| (entry.path(), name_of(&entry.path())))
+        .map(|entry| entry.path())
         .collect();
-    names.sort_by(|a, b| a.1.cmp(&b.1));
-    Some(names)
+    paths.sort();
+    Some(
+        paths
+            .into_iter()
+            .map(|path| {
+                let name = name_of(&path);
+                (path, name)
+            })
+            .collect(),
+    )
 }
 
-/// The last part of `path`. A name that is not UTF-8 keeps a replacement
-/// character, which `path::checked` then refuses.
-fn name_of(path: &Path) -> String {
-    path.file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+/// The last part of `path`, or, if it is not UTF-8 (possible on Linux),
+/// the error with a readable version to show the owner: such a name
+/// cannot be written the same way on the other PC.
+fn name_of(path: &Path) -> Result<String, String> {
+    let name = path.file_name().unwrap_or_default();
+    name.to_str()
+        .map(str::to_string)
+        .ok_or_else(|| name.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -260,6 +280,25 @@ mod tests {
         let why: Vec<Why> = listing.skipped.iter().map(|skipped| skipped.why).collect();
         // In name order: `Foto.jpg`, `a:b.txt`, `foto.jpg`.
         assert_eq!(why, [Why::BadName, Why::SameNameOtherCase]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_not_utf8_is_skipped() {
+        use std::os::unix::ffi::OsStrExt;
+        let scratch = Scratch::new("utf8");
+        scratch.file("docs/ok.txt", b"");
+        let odd = std::ffi::OsStr::from_bytes(b"caf\xe9.txt");
+        std::fs::write(scratch.0.join("docs").join(odd), b"").unwrap();
+        let listing = list(&[scratch.0.join("docs")]).unwrap();
+        assert_eq!(paths(&listing), ["docs", "docs/ok.txt"]);
+        assert_eq!(
+            listing.skipped,
+            [Skipped {
+                path: "docs/caf\u{FFFD}.txt".into(),
+                why: Why::BadName
+            }]
+        );
     }
 
     #[test]
