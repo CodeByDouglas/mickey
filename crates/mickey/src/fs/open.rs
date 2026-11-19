@@ -12,16 +12,28 @@ use std::path::Path;
     not(test),
     expect(dead_code, reason = "file transfers send with it from #478 on")
 )]
-pub fn without_links(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
+pub fn to_read(path: &Path) -> io::Result<File> {
+    open(path, OpenOptions::new().read(true))
+}
+
+/// Opens `path` to read and write, the same way: a transfer continuing its
+/// own `.part` (#475) must not write through a link put in its place.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "file transfers resume with it from #478 on")
+)]
+pub fn to_continue(path: &Path) -> io::Result<File> {
+    open(path, OpenOptions::new().read(true).write(true))
+}
+
+fn open(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     // Linux: opening a link fails (ELOOP) instead of opening its target.
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW);
+    std::os::unix::fs::OpenOptionsExt::custom_flags(options, libc::O_NOFOLLOW);
     // Windows: a link or junction is opened itself, not its target, and
     // then fails the check below.
     #[cfg(windows)]
-    std::os::windows::fs::OpenOptionsExt::custom_flags(&mut options, FILE_FLAG_OPEN_REPARSE_POINT);
+    std::os::windows::fs::OpenOptionsExt::custom_flags(options, FILE_FLAG_OPEN_REPARSE_POINT);
     let file = options.open(path)?;
     if !file.metadata()?.is_file() {
         return Err(io::Error::other(format!(
@@ -44,7 +56,8 @@ mod tests {
     fn a_plain_file_opens() {
         let path = std::env::temp_dir().join(format!("mickey-open-{}", std::process::id()));
         std::fs::write(&path, b"ok").unwrap();
-        assert!(without_links(&path).is_ok());
+        assert!(to_read(&path).is_ok());
+        assert!(to_continue(&path).is_ok());
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -56,8 +69,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("secret"), b"key").unwrap();
         std::os::unix::fs::symlink(dir.join("secret"), dir.join("link")).unwrap();
-        assert!(without_links(&dir.join("link")).is_err());
-        assert!(without_links(&dir).is_err());
+        assert!(to_read(&dir.join("link")).is_err());
+        assert!(to_continue(&dir.join("link")).is_err());
+        assert!(to_read(&dir).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

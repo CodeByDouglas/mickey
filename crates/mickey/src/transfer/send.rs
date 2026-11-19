@@ -54,7 +54,7 @@ fn send_file(
     from: u64,
 ) -> io::Result<()> {
     let skip = |link: &mut Link, why| send(link, &Message::Skip { index, why });
-    let Ok(mut file) = open::without_links(path) else {
+    let Ok(mut file) = open::to_read(path) else {
         return skip(link, Why::Gone);
     };
     if !unchanged(&file, size, modified) {
