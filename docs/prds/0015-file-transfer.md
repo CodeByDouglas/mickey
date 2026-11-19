@@ -351,3 +351,9 @@ them carry `Co-authored-by`.
   to #475: only re-hashing a big `.part` keeps a side silent for long.
   Starting the listener, and opening TCP 4244 in the installers, moves to
   #478, where there is an offer to serve.
+- **Free space** (#474): `platform/space.rs` asks the system
+  (`statvfs`, `GetDiskFreeSpaceExW`). A transfer starts only if all its
+  files fit with the margin to spare; while writing, the disk is looked at
+  every 64 MB or every second and writing stops while the margin is still
+  free. Until resuming exists (#475) the stopped file's `.part` is
+  removed; #475 keeps it.

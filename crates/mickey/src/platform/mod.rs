@@ -18,6 +18,8 @@ pub mod netif;
 pub mod output;
 #[cfg(target_os = "linux")]
 pub mod signals;
+#[cfg(any(target_os = "linux", windows))]
+pub mod space;
 #[cfg(windows)]
 pub mod tray;
 #[cfg(target_os = "linux")]

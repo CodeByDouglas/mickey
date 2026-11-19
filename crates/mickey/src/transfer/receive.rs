@@ -4,12 +4,15 @@
 //! Each file is written as `name.part` and gets its real name only once
 //! its hash matches the one the other PC sent. Nothing is written past
 //! the size the offer announced, and every path was checked when the
-//! offer was decoded (`wire`), and is checked again here.
+//! offer was decoded (`wire`), and is checked again here. The disk never
+//! fills: see `room`.
 
 use crate::net::secure::Link;
+use crate::platform::space;
 use crate::transfer::hash::HashWrite;
 use crate::transfer::offer::{Kind, Offer};
 use crate::transfer::path;
+use crate::transfer::room::{self, Guarded};
 use crate::transfer::wire::{self, Message, Why};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -28,6 +31,18 @@ pub struct Summary {
 /// Fetches every file of `offer` into the folder `into`. A copied file or
 /// folder whose name is taken there gets `name (2)`, never overwriting.
 pub fn fetch(link: &mut Link, offer: &Offer, into: &Path) -> io::Result<Summary> {
+    // Nothing is written unless all of it fits, with the margin to spare.
+    let need = offer
+        .entries
+        .iter()
+        .fold(0u64, |sum, entry| match entry.kind {
+            Kind::File { size } => sum.saturating_add(size),
+            Kind::Folder => sum,
+        });
+    let missing = room::missing(need, space::of(into)?);
+    if missing > 0 {
+        return Err(room::full(missing));
+    }
     let mut summary = Summary::default();
     // The name each top-level entry got here.
     let mut tops: Vec<(String, PathBuf)> = Vec::new();
@@ -123,24 +138,27 @@ fn receive_into(link: &mut Link, index: u32, size: u64, part: &Path) -> io::Resu
         .write(true)
         .create_new(true)
         .open(part)?;
-    let result = write_verified(link, index, size, file);
+    let folder = part.parent().unwrap_or(part);
+    let result = write_verified(link, index, size, file, folder);
     if !matches!(result, Ok(None)) {
         let _ = std::fs::remove_file(part);
     }
     result
 }
 
-/// Writes the file's bytes into `file` while hashing them, then checks
-/// the hash the other PC sends after them.
+/// Writes the file's bytes into `file` while hashing them, and while the
+/// disk holding `folder` keeps its margin, then checks the hash the other
+/// PC sends after them.
 fn write_verified(
     link: &mut Link,
     index: u32,
     size: u64,
     file: std::fs::File,
+    folder: &Path,
 ) -> io::Result<Option<Why>> {
     let mut hasher = blake3::Hasher::new();
     let mut writer = HashWrite {
-        inner: BufWriter::new(file),
+        inner: Guarded::new(BufWriter::new(file), || space::of(folder)),
         hasher: &mut hasher,
     };
     link.recv_stream(&mut writer, size)?;
@@ -384,6 +402,22 @@ mod tests {
         let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
         assert_eq!(summary.skipped, [("shared/a.txt".to_string(), Why::Gone)]);
         assert!(!scratch.dest().join("shared/a.txt").exists());
+    }
+
+    #[test]
+    fn an_offer_that_does_not_fit_writes_nothing() {
+        let scratch = Scratch::new("too-big");
+        let (mut fetching, _serving) = link_pair();
+        let offer = Offer {
+            id: 1,
+            entries: vec![Entry {
+                path: "huge.bin".into(),
+                kind: Kind::File { size: 1 << 50 },
+            }],
+        };
+        let err = fetch(&mut fetching, &offer, &scratch.dest()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::StorageFull);
+        assert_eq!(std::fs::read_dir(scratch.dest()).unwrap().count(), 0);
     }
 
     #[test]
