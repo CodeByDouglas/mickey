@@ -502,9 +502,10 @@ fn carry(
                 Some(Ok((Wire::Files(files), _, _))) => {
                     save(files).map(|paths| Carried::Content(Content::Files(paths)))
                 }
-                // A peer offers only its own files, from its own address.
+                // A peer offers only its own files, from its own address:
+                // the one its data link comes from, whatever it says.
                 Some(Ok((Wire::Offer(mut offer), ip, key))) if offer.key == key => {
-                    offer.ip.get_or_insert(ip);
+                    offer.ip = Some(ip);
                     Some(Carried::Offer(offer))
                 }
                 Some(Ok(_)) | None => None,

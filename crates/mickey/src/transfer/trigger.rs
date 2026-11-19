@@ -10,6 +10,8 @@
 use crate::clipboard::{Content, Keeper};
 use crate::net::identity::Identity;
 use crate::net::transport;
+use crate::net::trust;
+use crate::threads::LockAnyway;
 use crate::transfer::offer::{self, Kind, Offer};
 use crate::transfer::offers::Offers;
 use crate::transfer::receive::{self, Fetched};
@@ -100,6 +102,8 @@ pub struct Transfers {
     /// Where fetched files go, a fresh folder per transfer: the received
     /// files' folder (`clipboard::received::base`).
     pub received: PathBuf,
+    /// Files are fetched only from a paired PC.
+    pub trusted: trust::Shared,
 }
 
 impl Transfers {
@@ -107,9 +111,13 @@ impl Transfers {
     /// the one before. The IP is left out: the receiving PC knows it.
     pub fn offer(&self, paths: &[PathBuf]) -> Result<FileOffer, String> {
         let listing = offer::list(paths)?;
-        for skipped in &listing.skipped {
-            // The name only, never the content (CONTRIBUTING: the clipboard).
-            println!("mickey: not offered: {} ({:?})", skipped.path, skipped.why);
+        // How many, never their names: what is copied stays out of the log
+        // (CONTRIBUTING, the clipboard); the names are for the window.
+        if !listing.skipped.is_empty() {
+            println!(
+                "mickey: {} copied files or folders not offered (links, names Windows refuses, unreadable)",
+                listing.skipped.len()
+            );
         }
         Ok(FileOffer {
             ip: None,
@@ -152,6 +160,9 @@ impl Transfers {
     /// Fetches `offer` into a fresh folder for received files; where its
     /// top-level files and folders landed.
     fn fetch_now(&self, offer: &FileOffer, from: IpAddr) -> Result<Vec<PathBuf>, String> {
+        if !self.trusted.lock_anyway().is_trusted(&offer.key) {
+            return Err("files offered by a PC that is not paired".into());
+        }
         let at = offer.address(from);
         let mut link = transport::connect_transfer(at, &self.identity).map_err(|err| {
             format!(
@@ -256,6 +267,35 @@ mod tests {
         }
     }
 
+    /// A list of trusted PCs kept in `dir`, holding `key` if given.
+    fn trusting(dir: &std::path::Path, key: Option<[u8; 32]>) -> trust::Shared {
+        std::fs::create_dir_all(dir).unwrap();
+        let mut peers = trust::TrustedPeers::load(dir).unwrap();
+        if let Some(key) = key {
+            peers.add(key, "test").unwrap();
+        }
+        Arc::new(std::sync::Mutex::new(peers))
+    }
+
+    #[test]
+    fn files_offered_by_a_pc_not_paired_are_not_fetched() {
+        let scratch =
+            Scratch(std::env::temp_dir().join(format!("mickey-unpaired-{}", std::process::id())));
+        let b = Transfers {
+            offers: Arc::new(Offers::default()),
+            identity: Arc::new(Identity::generate().unwrap()),
+            port: 1,
+            received: scratch.0.join("received"),
+            trusted: trusting(&scratch.0.join("trust"), None),
+        };
+        // Refused before any connection: nothing listens at that address.
+        let err = b
+            .fetch_now(&file_offer(None), "127.0.0.1".parse().unwrap())
+            .unwrap_err();
+        assert!(err.contains("not paired"), "{err}");
+        assert!(!scratch.0.join("received").exists());
+    }
+
     /// A free port for an input link, with the transfer port after it free.
     fn free_input_port() -> SocketAddr {
         loop {
@@ -284,6 +324,7 @@ mod tests {
             identity: Arc::new(Identity::generate().unwrap()),
             port: listen.port(),
             received: scratch.0.join("a-received"),
+            trusted: trusting(&scratch.0.join("a-trust"), None),
         });
         let offers = Arc::clone(&a.offers);
         crate::transfer::serve::serve(
@@ -332,6 +373,7 @@ mod tests {
             identity: Arc::new(Identity::generate().unwrap()),
             port: 1,
             received: scratch.0.join("b-received"),
+            trusted: trusting(&scratch.0.join("b-trust"), Some(*a.identity.public())),
         });
         let b_keeper = Keeper::in_memory(Some(Content::Text("copied before".into())));
         b.fetch(offer, listen.ip(), b_keeper.clone());
