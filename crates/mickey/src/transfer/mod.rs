@@ -19,5 +19,6 @@ pub mod receive;
 pub mod room;
 pub mod send;
 pub mod serve;
+pub mod show;
 pub mod trigger;
 pub mod wire;
