@@ -365,3 +365,12 @@ them carry `Co-authored-by`.
   on disk is never trusted.
 - **`StillHere`** (#475): while a side re-reads what it has of a big file
   to hash it, it sends one every 5 s, a third of `TRANSFER_SILENT`.
+- **Offer ids are random, not a hash** (#478): an id is what lets a PC
+  fetch, and only the PC the clipboard was carried to learns it, over the
+  encrypted link; another paired PC cannot fetch the copied files at any
+  time, which would get around #185. Only the latest offer is served.
+- **Every PC listens for transfers**, controlled or not: the PC with the
+  keyboard is where things are copied most. A PC updated by Mickey itself
+  keeps its firewall as it was (the update runs without `sudo`): with
+  firewalld or ufw on, TCP 4244 must be let in by hand once. A fresh
+  install opens it.

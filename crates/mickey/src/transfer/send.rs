@@ -13,11 +13,14 @@ use crate::transfer::offer::Listing;
 use crate::transfer::wire::{self, Message, Why};
 use std::io::{self, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::SystemTime;
 
-/// Answers fetches for the offer `offer` (made from `listing`) until the
-/// other PC hangs up, which is how a transfer ends.
-pub fn serve(link: &mut Link, listing: &Listing, offer: u64) -> io::Result<()> {
+/// Answers fetches until the other PC hangs up, which is how a transfer
+/// ends. Each fetch names its offer, which `find` turns into the listing
+/// it was made from; an offer `find` does not know (never handed out, or
+/// no longer current) ends the connection.
+pub fn serve(link: &mut Link, find: impl Fn(u64) -> Option<Arc<Listing>>) -> io::Result<()> {
     loop {
         let bytes = match link.recv_bulk() {
             Ok(bytes) => bytes,
@@ -30,9 +33,7 @@ pub fn serve(link: &mut Link, listing: &Listing, offer: u64) -> io::Result<()> {
             Message::StillHere => continue,
             _ => return Err(invalid("expected a fetch".into())),
         };
-        if asked != offer {
-            return Err(invalid("a fetch for another offer".into()));
-        }
+        let listing = find(asked).ok_or_else(|| invalid("a fetch for an unknown offer".into()))?;
         let (path, size, modified) = listing
             .file(index)
             .ok_or_else(|| invalid(format!("no file {index} in the offer")))?;

@@ -9,7 +9,7 @@ post_install() {
     echo "Mickey: add yourself to the input group, then restart once:"
     echo "  sudo usermod -aG input \$USER"
     echo "Every program run by a member of the input group can read the"
-    echo "keyboard, not only Mickey. With a firewall on, let in TCP 4242-4243"
+    echo "keyboard, not only Mickey. With a firewall on, let in TCP 4242-4244"
     echo "and UDP 4243-4244."
 }
 

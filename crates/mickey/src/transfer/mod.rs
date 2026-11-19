@@ -11,6 +11,7 @@
 
 pub mod hash;
 pub mod offer;
+pub mod offers;
 pub mod path;
 pub mod progress;
 pub mod receive;

@@ -11,6 +11,7 @@ happens around it (pairing windows, edges, the switcher) is in
 |---|---|---|---|---|---|
 | Input link | TCP, Noise | `[this_pc] listen`, 4242 by default | The source side | Keys, motion, pings, focus, edges | `transport.rs`, `secure.rs`, `protocol.rs` |
 | Data link | TCP, Noise | The input port + 1 (4243) | The source side, once its input link is up | Clipboard, group map, hotkeys, switcher cards | `transport.rs`, `secure.rs`, `clipboard/wire.rs`, `group.rs` |
+| File transfers | TCP, Noise | The input port + 2 (4244) | The PC that fetches, to the PC whose files were offered (PRD 0015) | Files of an offer, by its random id and their index | `transfer/serve.rs`, `transfer/send.rs`, `transfer/receive.rs`, `transfer/wire.rs` |
 | Discovery | UDP broadcast | 4243 | Everyone, every 3 s | Name, port and public key | `discovery.rs` |
 | Audio | UDP, sealed datagrams | The input port + 2 (4244) | A PC sending its sound to the PC that listens | 5 ms of sound each | `audio.rs`, `audio/wire.rs` |
 

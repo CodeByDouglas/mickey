@@ -98,7 +98,6 @@ pub fn accept_data(
 
 /// Transfers (PRD 0015) listen on the port after the data link's: the data
 /// port keeps one link per PC (#452), and a transfer must not close it.
-#[cfg_attr(not(test), expect(dead_code, reason = "transfers listen from #474 on"))]
 pub fn transfer_address(input: SocketAddr) -> SocketAddr {
     SocketAddr::new(input.ip(), input.port().wrapping_add(2))
 }
@@ -116,7 +115,6 @@ pub fn connect_transfer(input: SocketAddr, identity: &Identity) -> io::Result<Li
 
 /// The side that serves a transfer. Like a data link, only a paired PC
 /// may open one.
-#[cfg_attr(not(test), expect(dead_code, reason = "transfers listen from #474 on"))]
 pub fn accept_transfer(
     stream: TcpStream,
     identity: &Identity,

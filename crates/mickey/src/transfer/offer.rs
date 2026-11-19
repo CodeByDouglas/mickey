@@ -7,7 +7,6 @@
 
 use crate::transfer::path;
 use std::collections::HashSet;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -19,21 +18,21 @@ pub const MAX_ENTRIES: usize = 100_000;
 /// What crosses to the other PC: the copied tree, without content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Offer {
-    /// Names this offer on the PC that made it, which is the only one that
-    /// computes it: the other PC only sends it back.
+    /// Names this offer: random, and known only to the PC it was carried
+    /// to, which sends it back to fetch (`Offers`).
     pub id: u64,
     /// Every folder comes before what is inside it.
     pub entries: Vec<Entry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     /// Relative, `/` between folders, every part a safe name.
     pub path: String,
     pub kind: Kind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Folder,
     File { size: u64 },
@@ -84,15 +83,10 @@ impl Listing {
         Some((path, size, *modified))
     }
 
-    /// The offer for this listing.
-    pub fn offer(&self) -> Offer {
-        let mut hasher = DefaultHasher::new();
-        for (entry, (_, modified)) in self.entries.iter().zip(&self.local) {
-            entry.hash(&mut hasher);
-            modified.hash(&mut hasher);
-        }
+    /// The offer for this listing, under `id` (`Offers` picks it).
+    pub fn offer(&self, id: u64) -> Offer {
         Offer {
-            id: hasher.finish(),
+            id,
             entries: self.entries.clone(),
         }
     }
@@ -311,16 +305,5 @@ mod tests {
                 why: Why::BadName
             }]
         );
-    }
-
-    #[test]
-    fn the_same_files_make_the_same_offer_and_a_change_a_new_one() {
-        let scratch = Scratch::new("id");
-        scratch.file("a.txt", b"one");
-        let roots = [scratch.0.join("a.txt")];
-        let first = list(&roots).unwrap().offer();
-        assert_eq!(list(&roots).unwrap().offer(), first);
-        scratch.file("a.txt", b"longer");
-        assert_ne!(list(&roots).unwrap().offer().id, first.id);
     }
 }

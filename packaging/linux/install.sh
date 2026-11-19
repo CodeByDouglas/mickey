@@ -59,21 +59,22 @@ for window in mickey-ui:switcher mickey-history:history mickey-pair:pairing; do
         "${window#*:}" "$bin" > "$apps/${window%%:*}.desktop"
 done
 
-# Other PCs connect to this one on TCP 4242 (input) and 4243 (clipboard),
-# find it on UDP 4243 and send it their sound on UDP 4244. A firewall
+# Other PCs connect to this one on TCP 4242 (input), 4243 (clipboard) and
+# 4244 (file transfers), find it on UDP 4243 and send it their sound on
+# UDP 4244. A firewall
 # that is on (firewalld on openSUSE and Fedora, ufw on Ubuntu when
 # enabled) would refuse them; Windows' installer lets Mickey itself in.
 if [ "$update" = 1 ]; then
     : # The firewall was opened at the first install.
 elif command -v firewall-cmd >/dev/null && sudo firewall-cmd --state >/dev/null 2>&1; then
-    echo "Letting other PCs reach Mickey through firewalld (TCP 4242-4243, UDP 4243-4244)"
-    for port in 4242/tcp 4243/tcp 4243/udp 4244/udp; do
+    echo "Letting other PCs reach Mickey through firewalld (TCP 4242-4244, UDP 4243-4244)"
+    for port in 4242/tcp 4243/tcp 4244/tcp 4243/udp 4244/udp; do
         sudo firewall-cmd -q --permanent --add-port=$port
         sudo firewall-cmd -q --add-port=$port
     done
 elif command -v ufw >/dev/null && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
-    echo "Letting other PCs reach Mickey through ufw (TCP 4242-4243, UDP 4243-4244)"
-    for port in 4242/tcp 4243/tcp 4243/udp 4244/udp; do
+    echo "Letting other PCs reach Mickey through ufw (TCP 4242-4244, UDP 4243-4244)"
+    for port in 4242/tcp 4243/tcp 4244/tcp 4243/udp 4244/udp; do
         sudo ufw allow $port comment Mickey >/dev/null
     done
 fi

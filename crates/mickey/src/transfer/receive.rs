@@ -441,11 +441,18 @@ mod tests {
         (ours.unwrap(), theirs.join().unwrap())
     }
 
+    /// What `send::serve` finds for a PC that handed out only `listing`, as
+    /// offer `id`.
+    fn only(listing: Listing, id: u64) -> impl Fn(u64) -> Option<std::sync::Arc<Listing>> {
+        let listing = std::sync::Arc::new(listing);
+        move |asked| (asked == id).then(|| std::sync::Arc::clone(&listing))
+    }
+
     /// Serves `listing` on one end and fetches it into `into` on the other.
     fn transfer(listing: Listing, offer: &Offer, into: &Path) -> io::Result<Summary> {
         let (mut fetching, mut serving) = link_pair();
         let id = offer.id;
-        let server = thread::spawn(move || send::serve(&mut serving, &listing, id));
+        let server = thread::spawn(move || send::serve(&mut serving, only(listing, id)));
         let mut fetched = Fetched::default();
         let result = fetch(&mut fetching, offer, into, &mut fetched);
         drop(fetching);
@@ -462,7 +469,7 @@ mod tests {
         scratch.file("fotos/empty.txt", b"");
         std::fs::create_dir(scratch.0.join("from/fotos/nothing")).unwrap();
         let listing = offer::list(&[scratch.0.join("from/fotos")]).unwrap();
-        let offer = listing.offer();
+        let offer = listing.offer(7);
         let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
         let fotos = scratch.dest().join("fotos");
         assert_eq!(std::fs::read(fotos.join("praia.jpg")).unwrap(), big);
@@ -480,7 +487,7 @@ mod tests {
         scratch.file("notes.txt", b"new");
         std::fs::write(scratch.dest().join("notes.txt"), b"old").unwrap();
         let listing = offer::list(&[scratch.0.join("from/notes.txt")]).unwrap();
-        let offer = listing.offer();
+        let offer = listing.offer(7);
         let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
         assert_eq!(
             std::fs::read(scratch.dest().join("notes.txt")).unwrap(),
@@ -505,7 +512,7 @@ mod tests {
             scratch.0.join("from/my.project"),
         ];
         let listing = offer::list(&roots).unwrap();
-        let offer = listing.offer();
+        let offer = listing.offer(7);
         let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
         let dest = scratch.dest();
         assert_eq!(std::fs::read(dest.join("notes.txt.part")).unwrap(), b"mine");
@@ -525,7 +532,7 @@ mod tests {
         let scratch = Scratch::new("skipped");
         scratch.file("gone.txt", b"x");
         let listing = offer::list(&[scratch.0.join("from/gone.txt")]).unwrap();
-        let offer = listing.offer();
+        let offer = listing.offer(7);
         std::fs::remove_file(scratch.0.join("from/gone.txt")).unwrap();
         let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
         assert!(summary.landed.is_empty());
@@ -539,7 +546,7 @@ mod tests {
         scratch.file("docs/goes.txt", b"here");
         scratch.file("docs/stays.txt", b"same");
         let listing = offer::list(&[scratch.0.join("from/docs")]).unwrap();
-        let offer = listing.offer();
+        let offer = listing.offer(7);
         scratch.file("docs/changes.txt", b"after, longer");
         std::fs::remove_file(scratch.0.join("from/docs/goes.txt")).unwrap();
         let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
@@ -562,7 +569,7 @@ mod tests {
         scratch.file("secret", b"key");
         scratch.file("shared/a.txt", b"ok");
         let listing = offer::list(&[scratch.0.join("from/shared")]).unwrap();
-        let offer = listing.offer();
+        let offer = listing.offer(7);
         let a = scratch.0.join("from/shared/a.txt");
         std::fs::remove_file(&a).unwrap();
         std::os::unix::fs::symlink(scratch.0.join("from/secret"), &a).unwrap();
@@ -578,7 +585,7 @@ mod tests {
         scratch.file("docs/first.txt", b"first");
         scratch.file("docs/big.bin", &big);
         let listing = offer::list(&[scratch.0.join("from/docs")]).unwrap();
-        let offer = listing.offer();
+        let offer = listing.offer(7);
         let mut fetched = Fetched::default();
         // The first attempt: `big.bin` (index 1) breaks after 300 000
         // bytes, as when the network goes.
@@ -608,7 +615,7 @@ mod tests {
         // The second attempt asks only for the rest (starting over would
         // fail: a new `.part` must not exist yet), and checks the whole.
         let (mut fetching, mut serving) = link_pair();
-        let server = thread::spawn(move || send::serve(&mut serving, &listing, id).unwrap());
+        let server = thread::spawn(move || send::serve(&mut serving, only(listing, id)).unwrap());
         fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).unwrap();
         drop(fetching);
         server.join().unwrap();
@@ -634,7 +641,7 @@ mod tests {
             scratch.0.join("from/photo.jpg"),
         ];
         let listing = offer::list(&roots).unwrap();
-        let offer = listing.offer();
+        let offer = listing.offer(7);
         transfer(listing, &offer, &scratch.dest()).unwrap();
         let dest = scratch.dest();
         assert_eq!(std::fs::read(dest.join("photo.jpg")).unwrap(), b"owner's");
@@ -658,7 +665,7 @@ mod tests {
         let scratch = Scratch::new("first-byte");
         scratch.file("a.txt", b"hello");
         let listing = offer::list(&[scratch.0.join("from/a.txt")]).unwrap();
-        let offer = listing.offer();
+        let offer = listing.offer(7);
         let mut fetched = Fetched::default();
         break_at_once(&offer, &scratch.dest(), &mut fetched);
         assert!(
@@ -667,7 +674,7 @@ mod tests {
         );
         let (mut fetching, mut serving) = link_pair();
         let id = offer.id;
-        let server = thread::spawn(move || send::serve(&mut serving, &listing, id).unwrap());
+        let server = thread::spawn(move || send::serve(&mut serving, only(listing, id)).unwrap());
         fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).unwrap();
         drop(fetching);
         server.join().unwrap();
@@ -682,13 +689,13 @@ mod tests {
         let scratch = Scratch::new("owner-meanwhile");
         scratch.file("a.txt", b"from the other PC");
         let listing = offer::list(&[scratch.0.join("from/a.txt")]).unwrap();
-        let offer = listing.offer();
+        let offer = listing.offer(7);
         let mut fetched = Fetched::default();
         break_at_once(&offer, &scratch.dest(), &mut fetched);
         std::fs::write(scratch.dest().join("a.txt"), b"the owner's").unwrap();
         let (mut fetching, mut serving) = link_pair();
         let id = offer.id;
-        let server = thread::spawn(move || send::serve(&mut serving, &listing, id).unwrap());
+        let server = thread::spawn(move || send::serve(&mut serving, only(listing, id)).unwrap());
         let err = fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).unwrap_err();
         drop(fetching);
         server.join().unwrap();

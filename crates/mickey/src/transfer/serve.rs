@@ -8,13 +8,38 @@
 use crate::net::identity::Identity;
 use crate::net::secure::Link;
 use crate::net::transport;
+use crate::net::trust;
 use crate::target::slots::{self, SharedSlots, Slot};
+use crate::threads::LockAnyway;
+use crate::transfer::offers::Offers;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
 
 /// The most transfers one PC may have open here at once: one running and
 /// one starting while the last one ends.
 pub const MAX_PER_PC: usize = 2;
+
+/// Serves the offers this PC hands out (`offers`) to paired PCs, on the
+/// transfer port for `listen`, for as long as Mickey runs. A PC that
+/// cannot listen there only misses file transfers.
+pub fn start(
+    listen: SocketAddr,
+    identity: Arc<Identity>,
+    trusted: trust::Shared,
+    offers: Arc<Offers>,
+) {
+    let is_trusted = move |key: &[u8; 32]| trusted.lock_anyway().is_trusted(key);
+    let answer = move |mut link: Link| {
+        let find = |id| offers.find(id);
+        if let Err(err) = crate::transfer::send::serve(&mut link, find) {
+            eprintln!("mickey: a transfer ended: {err}");
+        }
+    };
+    if let Err(err) = serve(listen, identity, is_trusted, answer) {
+        let port = transport::transfer_address(listen).port();
+        eprintln!("mickey: no file transfers: cannot listen on TCP {port}: {err}");
+    }
+}
 
 /// Listens for transfers on the port for `listen` (the input link's) and
 /// hands each paired PC's link to `handle`, on its own thread. Returns once
