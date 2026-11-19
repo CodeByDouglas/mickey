@@ -12,6 +12,7 @@
 //! finished files are not fetched again, and a `.part` this transfer wrote
 //! continues from its last byte.
 
+use crate::fs::mark::Mark;
 use crate::net::secure::Link;
 use crate::platform::space;
 use crate::threads::LockAnyway;
@@ -53,6 +54,9 @@ pub struct Fetched {
     pub summary: Summary,
     /// For the window to show while it runs.
     pub progress: progress::Shared,
+    /// How arriving files are marked on Windows: from which PC, and
+    /// whether as from the Internet.
+    pub mark: Mark,
 }
 
 /// Fetches every file of `offer` into the folder `into`, or what is left of
@@ -110,15 +114,7 @@ fn fetch_all(link: &mut Link, offer: &Offer, into: &Path, fetched: &mut Fetched)
         if let Kind::File { size } = entry.kind {
             let wire_index = u32::try_from(index).map_err(|_| invalid("too many files".into()))?;
             let kept = kept(fetched, index, target, size);
-            match fetch_file(
-                link,
-                offer.id,
-                wire_index,
-                size,
-                kept,
-                target,
-                &fetched.progress,
-            ) {
+            match fetch_file(link, offer.id, wire_index, size, kept, target, fetched) {
                 Ok(None) => {
                     fetched.summary.files += 1;
                     fetched.summary.bytes += size;
@@ -217,8 +213,9 @@ fn fetch_file(
     size: u64,
     kept: Option<u64>,
     target: &Path,
-    progress: &Mutex<Progress>,
+    fetched: &Fetched,
 ) -> io::Result<Option<Why>> {
+    let progress = &*fetched.progress;
     if let Some(folder) = target.parent() {
         std::fs::create_dir_all(folder)?;
     }
@@ -276,8 +273,7 @@ fn fetch_file(
         let _ = std::fs::remove_file(&part);
         return Err(taken(target));
     }
-    #[cfg(windows)]
-    crate::fs::mark::as_downloaded(&part);
+    fetched.mark.put_on(&part);
     std::fs::rename(&part, target)
         .inspect_err(|_| {
             let _ = std::fs::remove_file(&part);

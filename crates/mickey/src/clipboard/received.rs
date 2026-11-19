@@ -35,6 +35,9 @@ pub fn save(files: Vec<(String, Vec<u8>)>) -> Result<Vec<PathBuf>, String> {
 
 fn save_in(base: &Path, files: Vec<(String, Vec<u8>)>) -> Result<Vec<PathBuf>, String> {
     let folder = fresh_folder(base)?;
+    // The clipboard's files say they came from Mickey, not which PC: the
+    // data link does not say.
+    let mark = crate::fs::mark::Mark::configured("");
     let mut paths = Vec::new();
     for (name, bytes) in files {
         let name = names::safe_name(&name)
@@ -42,8 +45,7 @@ fn save_in(base: &Path, files: Vec<(String, Vec<u8>)>) -> Result<Vec<PathBuf>, S
         let path = folder.join(name);
         std::fs::write(&path, bytes)
             .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
-        #[cfg(windows)]
-        crate::fs::mark::as_downloaded(&path);
+        mark.put_on(&path);
         paths.push(path);
     }
     prune(base);
