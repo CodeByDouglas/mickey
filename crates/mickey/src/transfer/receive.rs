@@ -37,8 +37,8 @@ pub fn fetch(link: &mut Link, offer: &Offer, into: &Path) -> io::Result<Summary>
         let here = match tops.iter().find(|(name, _)| name == top) {
             Some((_, here)) => here.clone(),
             None => {
-                let here = free_name(&into.join(top));
-                summary.landed.push(here.clone());
+                let is_file = top == entry.path && matches!(entry.kind, Kind::File { .. });
+                let here = free_name(&into.join(top), is_file);
                 tops.push((top.to_string(), here.clone()));
                 here
             }
@@ -65,6 +65,12 @@ pub fn fetch(link: &mut Link, offer: &Offer, into: &Path) -> io::Result<Summary>
             }
         }
     }
+    // Only what is there: a copied file the other PC skipped never landed.
+    summary.landed = tops
+        .into_iter()
+        .map(|(_, here)| here)
+        .filter(|here| here.symlink_metadata().is_ok())
+        .collect();
     Ok(summary)
 }
 
@@ -88,18 +94,20 @@ fn fetch_file(
             from: 0,
         },
     )?;
-    let result = receive_into(link, index, size, &part);
-    if !matches!(result, Ok(None)) {
-        let _ = std::fs::remove_file(&part);
-        return result;
+    if let Some(why) = receive_into(link, index, size, &part)? {
+        return Ok(Some(why));
     }
     #[cfg(windows)]
     crate::fs::mark::as_downloaded(&part);
-    std::fs::rename(&part, target)?;
-    Ok(None)
+    std::fs::rename(&part, target)
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&part);
+        })
+        .map(|()| None)
 }
 
-/// Receives the file at `index` into `part` and checks its hash.
+/// Receives the file at `index` into `part`, a file it creates, and
+/// checks its hash. `part` is removed again unless the file arrived whole.
 fn receive_into(link: &mut Link, index: u32, size: u64, part: &Path) -> io::Result<Option<Why>> {
     match recv(link)? {
         Message::Skip { index: got, why } if got == index => return Ok(Some(why)),
@@ -109,9 +117,30 @@ fn receive_into(link: &mut Link, index: u32, size: u64, part: &Path) -> io::Resu
         } if got == index && sent == size => {}
         _ => return Err(invalid(format!("not the file {index} that was asked for"))),
     }
+    // Created new: a `.part` already there (the owner's, or a link) is not
+    // this transfer's to write over or to remove.
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(part)?;
+    let result = write_verified(link, index, size, file);
+    if !matches!(result, Ok(None)) {
+        let _ = std::fs::remove_file(part);
+    }
+    result
+}
+
+/// Writes the file's bytes into `file` while hashing them, then checks
+/// the hash the other PC sends after them.
+fn write_verified(
+    link: &mut Link,
+    index: u32,
+    size: u64,
+    file: std::fs::File,
+) -> io::Result<Option<Why>> {
     let mut hasher = blake3::Hasher::new();
     let mut writer = HashWrite {
-        inner: BufWriter::new(std::fs::File::create(part)?),
+        inner: BufWriter::new(file),
         hasher: &mut hasher,
     };
     link.recv_stream(&mut writer, size)?;
@@ -129,14 +158,22 @@ fn receive_into(link: &mut Link, index: u32, size: u64, part: &Path) -> io::Resu
     }
 }
 
-/// `path`, or `path (2)`, `path (3)`… for the first that does not exist; a
-/// file keeps its extension last (`foto (2).jpg`).
-fn free_name(path: &Path) -> PathBuf {
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    let extension = path.extension().map(|ext| ext.to_string_lossy());
+/// `path`, or `path (2)`, `path (3)`… for the first that is free: nothing
+/// there, and for a file no `.part` beside it either. A file keeps its
+/// extension last (`foto (2).jpg`); a folder's dot is part of its name.
+fn free_name(path: &Path, is_file: bool) -> PathBuf {
+    let (stem, extension) = match (is_file, path.extension()) {
+        (true, Some(ext)) => (path.file_stem(), Some(ext.to_string_lossy())),
+        _ => (path.file_name(), None),
+    };
+    let stem = stem.unwrap_or_default().to_string_lossy();
+    let taken = |candidate: &Path| {
+        candidate.symlink_metadata().is_ok()
+            || (is_file && part_of(candidate).symlink_metadata().is_ok())
+    };
     let mut candidate = path.to_path_buf();
     let mut n = 2;
-    while candidate.symlink_metadata().is_ok() {
+    while taken(&candidate) {
         let name = match &extension {
             Some(ext) => format!("{stem} ({n}).{ext}"),
             None => format!("{stem} ({n})"),
@@ -269,6 +306,45 @@ mod tests {
             b"new"
         );
         assert_eq!(summary.landed, [scratch.dest().join("notes (2).txt")]);
+    }
+
+    #[test]
+    fn the_owners_part_file_and_dotted_folders_are_left_alone() {
+        let scratch = Scratch::new("owners");
+        scratch.file("notes.txt", b"new");
+        scratch.file("my.project/a.txt", b"a");
+        std::fs::write(scratch.dest().join("notes.txt.part"), b"mine").unwrap();
+        std::fs::create_dir(scratch.dest().join("my.project")).unwrap();
+        let roots = [
+            scratch.0.join("from/notes.txt"),
+            scratch.0.join("from/my.project"),
+        ];
+        let listing = offer::list(&roots).unwrap();
+        let offer = listing.offer();
+        let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
+        let dest = scratch.dest();
+        assert_eq!(std::fs::read(dest.join("notes.txt.part")).unwrap(), b"mine");
+        assert_eq!(std::fs::read(dest.join("notes (2).txt")).unwrap(), b"new");
+        assert_eq!(
+            std::fs::read(dest.join("my.project (2)/a.txt")).unwrap(),
+            b"a"
+        );
+        assert_eq!(
+            summary.landed,
+            [dest.join("notes (2).txt"), dest.join("my.project (2)")]
+        );
+    }
+
+    #[test]
+    fn a_skipped_file_did_not_land() {
+        let scratch = Scratch::new("skipped");
+        scratch.file("gone.txt", b"x");
+        let listing = offer::list(&[scratch.0.join("from/gone.txt")]).unwrap();
+        let offer = listing.offer();
+        std::fs::remove_file(scratch.0.join("from/gone.txt")).unwrap();
+        let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
+        assert!(summary.landed.is_empty());
+        assert_eq!(summary.skipped, [("gone.txt".to_string(), Why::Gone)]);
     }
 
     #[test]
