@@ -3,7 +3,6 @@
 //! what arrived.
 
 pub mod downloads;
-#[cfg(windows)]
 pub mod mark;
 pub mod names;
 pub mod open;

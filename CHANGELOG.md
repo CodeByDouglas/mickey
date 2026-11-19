@@ -11,6 +11,9 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
+- On Windows, files from your other PCs no longer make SmartScreen or
+  Office warn: they are marked as from your local network, and say which
+  PC they came from. Settings > General can bring the warnings back.
 - Copied folders, and files of any size, now cross with copy and paste:
   they arrive checked, and Ctrl+V pastes them once they are all there.
   Over 1 GB a small window asks first whether to bring them, into

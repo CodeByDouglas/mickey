@@ -183,6 +183,12 @@ pub struct Clipboard {
     /// this PC's keyboard is the one moving.
     #[serde(default)]
     pub share: Share,
+    /// Windows only: files from another PC are marked as from the Internet,
+    /// so SmartScreen and Office's Protected View warn about them. Off (the
+    /// default): marked as from the local network, which they are; Defender
+    /// still scans them (PRD 0015).
+    #[serde(default)]
+    pub warn_received: bool,
 }
 
 /// `[clipboard] share`: when the clipboard crosses with the keyboard.

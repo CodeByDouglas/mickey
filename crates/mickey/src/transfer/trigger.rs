@@ -217,6 +217,7 @@ impl Transfers {
     ) -> Result<Vec<PathBuf>, String> {
         let mut link = self.connect(offer, from)?;
         let mut fetched = Fetched::default();
+        fetched.mark = crate::fs::mark::Mark::configured(who);
         let shown = link
             .try_clone()
             .ok()

@@ -44,6 +44,8 @@ pub struct Form {
     pub history: Option<bool>,
     /// Whether the clipboard follows this PC's keyboard (#437).
     pub share: Share,
+    /// Windows: files from another PC marked as from the Internet.
+    pub warn_received: bool,
     /// Ask GitHub once a day for a newer Mickey (PRD 0013).
     pub check_updates: bool,
     /// Who listens (PRD 0012): a PC's public key; `None`, nobody.
@@ -103,6 +105,7 @@ impl Form {
             vertical: config.interface.switcher_vertical,
             history: config.clipboard.history,
             share: config.clipboard.share,
+            warn_received: config.clipboard.warn_received,
             check_updates: config.updates.check,
             listener: config.audio.listener.clone(),
             mode: config.audio.mode,
@@ -229,7 +232,7 @@ impl Form {
             out += "\n[audio]\n";
             out += &audio.to_lines();
         }
-        if self.history.is_some() || self.share != Share::Auto {
+        if self.history.is_some() || self.share != Share::Auto || self.warn_received {
             out += "\n[clipboard]\n";
         }
         match self.history {
@@ -241,6 +244,9 @@ impl Form {
         }
         if self.share == Share::Off {
             out += "share = \"off\"    # the clipboard never follows this PC's keyboard\n";
+        }
+        if self.warn_received {
+            out += "warn_received = true    # Windows: files from other PCs marked as from the Internet\n";
         }
         if !self.check_updates {
             out += "\n[updates]\ncheck = false    # never ask GitHub for a newer Mickey\n";
