@@ -419,6 +419,7 @@ fn run_from_config() -> Result<(), String> {
                 port: this_pc.listen.port(),
                 received,
                 trusted: trusted.clone(),
+                came_from: Default::default(),
             })
         });
     // One clipboard for the whole process (PRD 0011).

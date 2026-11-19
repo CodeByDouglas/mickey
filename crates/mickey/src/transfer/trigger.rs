@@ -33,12 +33,17 @@ pub struct FileOffer {
     pub port: u16,
     /// The offering PC's key: the transfer link must answer with it.
     pub key: [u8; 32],
+    /// The PC these files came from, if they arrived on the offering PC
+    /// by a transfer: that PC has them already, and never fetches them
+    /// back (#424).
+    pub origin: Option<[u8; 32]>,
     pub offer: Offer,
 }
 
 impl FileOffer {
     /// `port: u16`, the IP (`0`, or `4` and 4 bytes, or `6` and 16 bytes),
-    /// `key: 32 bytes`, then the offer as `transfer::wire` encodes it.
+    /// `key: 32 bytes`, the origin (`0`, or `1` and 32 bytes), then the
+    /// offer as `transfer::wire` encodes it.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = self.port.to_be_bytes().to_vec();
         match self.ip {
@@ -53,6 +58,13 @@ impl FileOffer {
             }
         }
         out.extend_from_slice(&self.key);
+        match self.origin {
+            None => out.push(0),
+            Some(origin) => {
+                out.push(1);
+                out.extend_from_slice(&origin);
+            }
+        }
         out.extend_from_slice(&wire::encode(&Message::Offer(self.offer.clone())));
         out
     }
@@ -75,6 +87,14 @@ impl FileOffer {
             _ => return Err(format!("unknown address kind {kind} in a file offer")),
         };
         let (key, rest) = rest.split_first_chunk::<32>().ok_or_else(short)?;
+        let (origin, rest) = match rest.split_first().ok_or_else(short)? {
+            (0, rest) => (None, rest),
+            (1, rest) => {
+                let (origin, rest) = rest.split_first_chunk::<32>().ok_or_else(short)?;
+                (Some(*origin), rest)
+            }
+            (kind, _) => return Err(format!("unknown origin kind {kind} in a file offer")),
+        };
         let Message::Offer(offer) = wire::decode(rest)? else {
             return Err("a file offer without its offer".into());
         };
@@ -82,6 +102,7 @@ impl FileOffer {
             ip,
             port: u16::from_be_bytes(*port),
             key: *key,
+            origin,
             offer,
         })
     }
@@ -104,6 +125,9 @@ pub struct Transfers {
     pub received: PathBuf,
     /// Files are fetched only from a paired PC.
     pub trusted: trust::Shared,
+    /// Each folder transfers brought here, and the PC its files came from:
+    /// they are never sent back there (#424). As long as Mickey runs.
+    pub came_from: std::sync::Mutex<Vec<(PathBuf, [u8; 32])>>,
 }
 
 impl Transfers {
@@ -128,14 +152,36 @@ impl Transfers {
             ip: None,
             port: self.port,
             key: *self.identity.public(),
+            origin: self.origin_of(paths),
             offer: self.offers.hand_out(listing)?,
         })
+    }
+
+    /// The PC `paths` came from, if they all arrived here from one PC.
+    fn origin_of(&self, paths: &[PathBuf]) -> Option<[u8; 32]> {
+        let came_from = self.came_from.lock_anyway();
+        let origin_of = |path: &PathBuf| {
+            came_from
+                .iter()
+                .find(|(folder, _)| path.starts_with(folder))
+                .map(|(_, key)| *key)
+        };
+        let first = origin_of(paths.first()?)?;
+        paths
+            .iter()
+            .all(|path| origin_of(path) == Some(first))
+            .then_some(first)
     }
 
     /// Fetches `offer` (which came from the PC at `from`) on a thread of its
     /// own, and once every file is there and verified puts them on the
     /// clipboard, unless something else was copied meanwhile.
     pub fn fetch(self: &Arc<Self>, offer: FileOffer, from: IpAddr, keeper: Keeper) {
+        // Files that came from here: this PC has them already, and its
+        // clipboard keeps what it holds.
+        if offer.origin == Some(*self.identity.public()) {
+            return;
+        }
         let size = total(&offer.offer);
         if size > ASK_OVER {
             println!(
@@ -183,6 +229,7 @@ impl Transfers {
             return Err(format!("{} answered with another PC's key", at.ip()));
         }
         let into = crate::clipboard::received::new_folder(&self.received)?;
+        self.came_from.lock_anyway().push((into.clone(), offer.key));
         let mut fetched = Fetched::default();
         receive::fetch(&mut link, &offer.offer, &into, &mut fetched)
             .map_err(|err| err.to_string())?;
@@ -215,6 +262,7 @@ mod tests {
             ip,
             port: 4242,
             key: [7; 32],
+            origin: None,
             offer: Offer {
                 id: 99,
                 entries: vec![
@@ -293,6 +341,7 @@ mod tests {
             identity: Arc::new(Identity::generate().unwrap()),
             port: 1,
             received: scratch.0.join("received"),
+            came_from: Default::default(),
             trusted: trusting(&scratch.0.join("trust"), None),
         };
         // Copied, then deleted before the keyboard crossed.
@@ -312,6 +361,7 @@ mod tests {
             identity: Arc::new(Identity::generate().unwrap()),
             port: 1,
             received: scratch.0.join("received"),
+            came_from: Default::default(),
             trusted: trusting(&scratch.0.join("trust"), None),
         };
         // Refused before any connection: nothing listens at that address.
@@ -350,6 +400,7 @@ mod tests {
             identity: Arc::new(Identity::generate().unwrap()),
             port: listen.port(),
             received: scratch.0.join("a-received"),
+            came_from: Default::default(),
             trusted: trusting(&scratch.0.join("a-trust"), None),
         });
         let offers = Arc::clone(&a.offers);
@@ -399,6 +450,7 @@ mod tests {
             identity: Arc::new(Identity::generate().unwrap()),
             port: 1,
             received: scratch.0.join("b-received"),
+            came_from: Default::default(),
             trusted: trusting(&scratch.0.join("b-trust"), Some(*a.identity.public())),
         });
         let b_keeper = Keeper::in_memory(Some(Content::Text("copied before".into())));
@@ -415,5 +467,14 @@ mod tests {
         assert_eq!(pasted.len(), 1);
         assert!(pasted[0].starts_with(scratch.0.join("b-received")));
         assert_eq!(std::fs::read(pasted[0].join("a.txt")).unwrap(), b"hello");
+        // Copied again on B, the folder says it came from A, and A never
+        // fetches it back (#424): its clipboard keeps what it holds.
+        let back = b.offer(&pasted).unwrap();
+        assert_eq!(back.origin, Some(*a.identity.public()));
+        let a_clipboard = Keeper::in_memory(Some(Content::Text("A's own".into())));
+        a.fetch(back, listen.ip(), a_clipboard.clone());
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(a_clipboard.read(), Some(Content::Text("A's own".into())));
+        assert!(!scratch.0.join("a-received").exists(), "nothing fetched");
     }
 }

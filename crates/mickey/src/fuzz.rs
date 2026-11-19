@@ -159,6 +159,7 @@ fn clipboard() {
             ip: Some("192.0.2.7".parse().unwrap()),
             port: 4242,
             key: [3; 32],
+            origin: Some([4; 32]),
             offer: crate::transfer::offer::Offer {
                 id: 7,
                 entries: vec![crate::transfer::offer::Entry {
