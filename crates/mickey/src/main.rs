@@ -22,6 +22,7 @@ mod run;
 mod source;
 mod target;
 mod threads;
+mod transfer;
 mod tray;
 mod update;
 mod whats_new;
