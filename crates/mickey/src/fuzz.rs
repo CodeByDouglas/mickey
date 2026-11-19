@@ -190,6 +190,14 @@ fn transfer() {
             from: 0,
         },
         Message::File { index: 1, size: 9 },
+        Message::Hash {
+            index: 1,
+            hash: [7; 32],
+        },
+        Message::Skip {
+            index: 1,
+            why: wire::Why::Gone,
+        },
     ];
     let seeds: Vec<Vec<u8>> = messages.iter().map(wire::encode).collect();
     hammer(
