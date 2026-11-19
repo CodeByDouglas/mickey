@@ -13,6 +13,7 @@ pub mod hash;
 pub mod offer;
 pub mod path;
 pub mod receive;
+pub mod room;
 pub mod send;
 pub mod serve;
 pub mod wire;
