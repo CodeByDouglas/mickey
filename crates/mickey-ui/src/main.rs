@@ -13,6 +13,7 @@ mod layout;
 mod mickey;
 mod pair;
 mod place;
+mod progress;
 mod settings;
 mod snap;
 mod theme;
@@ -254,6 +255,11 @@ fn main() -> ExitCode {
     {
         let changes = changes.clone();
         return pair::window(who, pair::Ask::Hotkeys { changes });
+    }
+    if let [command, who] = args.as_slice()
+        && command == "progress"
+    {
+        return progress::window(who);
     }
     if let [command, who, size, what] = args.as_slice()
         && command == "bring"

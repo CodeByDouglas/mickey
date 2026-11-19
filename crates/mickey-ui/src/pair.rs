@@ -220,9 +220,9 @@ pub fn window(who: &str, ask: Ask) -> ExitCode {
     }
 }
 
-/// Where the owner wants the Bring question (`[interface] bring_position`),
-/// the bottom-right corner by default.
-fn bring_corner() -> crate::place::Corner {
+/// Where the owner wants the Bring question and the transfer's progress
+/// (`[interface] bring_position`), the bottom-right corner by default.
+pub(crate) fn bring_corner() -> crate::place::Corner {
     let position = mickey_config::Config::load()
         .ok()
         .flatten()

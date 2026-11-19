@@ -9,12 +9,14 @@
 
 use crate::clipboard::{Content, Keeper};
 use crate::net::identity::Identity;
+use crate::net::secure::Link;
 use crate::net::transport;
 use crate::net::trust;
 use crate::threads::LockAnyway;
 use crate::transfer::offer::{self, Kind, Offer};
 use crate::transfer::offers::Offers;
 use crate::transfer::receive::{self, Fetched};
+use crate::transfer::show::{Ended, Watcher};
 use crate::transfer::wire::{self, Message};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -184,13 +186,14 @@ impl Transfers {
         }
         let this = Arc::clone(self);
         crate::threads::spawn("transfer fetch", move || {
-            let into = match this.landing(&offer, from) {
+            let who = crate::target::data::peer_name(offer.ip.unwrap_or(from));
+            let into = match this.landing(&offer, &who) {
                 Ok(Some(into)) => into,
                 Ok(None) => return,
                 Err(err) => return eprintln!("mickey: files not fetched: {err}"),
             };
             let before = keeper.read();
-            match this.fetch_now(&offer, from, &into) {
+            match this.fetch_shown(&offer, from, &who, &into) {
                 // Everything skipped by the other PC: nothing to paste.
                 Ok(landed) if landed.is_empty() => {}
                 Ok(landed) if keeper.read() == before => keeper.write(Content::Files(landed)),
@@ -203,15 +206,44 @@ impl Transfers {
         });
     }
 
+    /// Fetches `offer` into `into`, showing how it goes once it takes more
+    /// than a moment (`show`); where its top-level files and folders landed.
+    fn fetch_shown(
+        &self,
+        offer: &FileOffer,
+        from: IpAddr,
+        who: &str,
+        into: &Path,
+    ) -> Result<Vec<PathBuf>, String> {
+        let mut link = self.connect(offer, from)?;
+        let mut fetched = Fetched::default();
+        let shown = link
+            .try_clone()
+            .ok()
+            .map(|stop| Watcher::start(who.to_string(), fetched.progress.clone(), stop));
+        let landed = self.receive(offer, &mut link, into, &mut fetched);
+        if let Some(shown) = shown {
+            shown.end(match &landed {
+                Ok(_) => Ended::Done {
+                    files: fetched.summary.files,
+                    bytes: fetched.summary.bytes,
+                    folder: into.display().to_string(),
+                },
+                Err(err) => Ended::Failed(err.clone()),
+            });
+        }
+        landed
+    }
+
     /// Where `offer`'s files go: a fresh folder among the received ones; or,
     /// over `ASK_OVER`, `Downloads/Mickey` if the owner says Bring, and
     /// `None` if they say Ignore.
-    fn landing(&self, offer: &FileOffer, from: IpAddr) -> Result<Option<PathBuf>, String> {
+    fn landing(&self, offer: &FileOffer, who: &str) -> Result<Option<PathBuf>, String> {
         let size = total(&offer.offer);
         if size <= ASK_OVER {
             return crate::clipboard::received::new_folder(&self.received).map(Some);
         }
-        if !ask_to_bring(offer, from, size) {
+        if !ask_to_bring(offer, who, size) {
             println!(
                 "mickey: {:.1} GB of files offered, not brought",
                 size as f64 / 1e9
@@ -224,19 +256,14 @@ impl Transfers {
         Ok(Some(folder))
     }
 
-    /// Fetches `offer` into the folder `into`; where its top-level files
-    /// and folders landed.
-    fn fetch_now(
-        &self,
-        offer: &FileOffer,
-        from: IpAddr,
-        into: &Path,
-    ) -> Result<Vec<PathBuf>, String> {
+    /// A transfer link to the PC that made `offer`: only a paired one, and
+    /// only if it answers with that PC's key.
+    fn connect(&self, offer: &FileOffer, from: IpAddr) -> Result<Link, String> {
         if !self.trusted.lock_anyway().is_trusted(&offer.key) {
             return Err("files offered by a PC that is not paired".into());
         }
         let at = offer.address(from);
-        let mut link = transport::connect_transfer(at, &self.identity).map_err(|err| {
+        let link = transport::connect_transfer(at, &self.identity).map_err(|err| {
             format!(
                 "cannot reach {} on TCP {} (a firewall?): {err}",
                 at.ip(),
@@ -247,9 +274,19 @@ impl Transfers {
         if *link.peer_key() != offer.key {
             return Err(format!("{} answered with another PC's key", at.ip()));
         }
-        let mut fetched = Fetched::default();
-        receive::fetch(&mut link, &offer.offer, into, &mut fetched)
-            .map_err(|err| err.to_string())?;
+        Ok(link)
+    }
+
+    /// Receives `offer` on `link` into the folder `into`; where its
+    /// top-level files and folders landed.
+    fn receive(
+        &self,
+        offer: &FileOffer,
+        link: &mut Link,
+        into: &Path,
+        fetched: &mut Fetched,
+    ) -> Result<Vec<PathBuf>, String> {
+        receive::fetch(link, &offer.offer, into, fetched).map_err(|err| err.to_string())?;
         let summary = &fetched.summary;
         // Never sent back there (#424).
         let landed = summary.landed.iter().map(|path| (path.clone(), offer.key));
@@ -264,12 +301,11 @@ impl Transfers {
     }
 }
 
-/// Asks the owner whether to bring `size` bytes of files offered by the
-/// PC at `from`: Bring or Ignore, with what they are (`mickey-ui bring`).
-fn ask_to_bring(offer: &FileOffer, from: IpAddr, size: u64) -> bool {
-    let who = crate::target::data::peer_name(offer.ip.unwrap_or(from));
+/// Asks the owner whether to bring `size` bytes of files offered by
+/// `who`: Bring or Ignore, with what they are (`mickey-ui bring`).
+fn ask_to_bring(offer: &FileOffer, who: &str, size: u64) -> bool {
     let size = format!("{:.1} GB", size as f64 / 1e9);
-    let answer = crate::window::ui_command(&["bring", &who, &size, &top_level(&offer.offer)])
+    let answer = crate::window::ui_command(&["bring", who, &size, &top_level(&offer.offer)])
         .and_then(|mut ui| ui.status());
     matches!(answer.map(|status| status.code()), Ok(Some(0)))
 }
@@ -452,13 +488,9 @@ mod tests {
             trusted: trusting(&scratch.0.join("trust"), None),
         };
         // Refused before any connection: nothing listens at that address.
-        let err = b
-            .fetch_now(
-                &file_offer(None),
-                "127.0.0.1".parse().unwrap(),
-                &scratch.0.join("received"),
-            )
-            .unwrap_err();
+        let Err(err) = b.connect(&file_offer(None), "127.0.0.1".parse().unwrap()) else {
+            panic!("a PC not paired must be refused");
+        };
         assert!(err.contains("not paired"), "{err}");
         assert!(!scratch.0.join("received").exists());
     }
