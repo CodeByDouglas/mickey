@@ -144,6 +144,13 @@ impl Bulk {
         stream.set_write_timeout(Some(DATA_WRITE_TIMEOUT))
     }
 
+    fn name(self) -> &'static str {
+        match self {
+            Bulk::Data => "data link",
+            Bulk::Transfer => "transfer",
+        }
+    }
+
     fn silent(self) -> Option<Duration> {
         match self {
             Bulk::Data => None,
@@ -174,7 +181,7 @@ fn accept_paired(
     if !trusted(link.peer_key()) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "a PC that is not paired asked for a data link",
+            format!("a PC that is not paired asked for a {}", bulk.name()),
         ));
     }
     link.set_read_timeout(bulk.silent())?;
