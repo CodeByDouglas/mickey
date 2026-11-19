@@ -12,6 +12,7 @@
 pub mod hash;
 pub mod offer;
 pub mod path;
+pub mod progress;
 pub mod receive;
 pub mod room;
 pub mod send;
