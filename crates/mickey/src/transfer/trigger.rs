@@ -315,7 +315,9 @@ impl Transfers {
         // Waits its turn behind another transfer from the same PC.
         let lane = self.lanes.of(&offer.key);
         let _turn = lane.lock_anyway();
-        let mut link = self.connect(offer, from)?;
+        let mut link = self
+            .connect(offer, from)
+            .inspect_err(|why| crate::transfer::show::failed(who, why))?;
         let shown = link
             .try_clone()
             .ok()

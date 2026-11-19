@@ -40,6 +40,10 @@ impl Watcher {
             loop {
                 match end.recv_timeout(EVERY) {
                     Ok(how) => {
+                        // A failure always shows, however soon it came.
+                        if window.is_none() && matches!(how, Ended::Failed(_)) {
+                            window = open(&who, Some(&stop));
+                        }
                         if let Some(mut input) = window {
                             let _ = writeln!(input, "{}", ended_line(&how));
                         }
@@ -49,7 +53,7 @@ impl Watcher {
                     Err(RecvTimeoutError::Timeout) => {}
                 }
                 if window.is_none() && started.elapsed() >= QUIET_FOR {
-                    window = open(&who, &stop);
+                    window = open(&who, Some(&stop));
                 }
                 if let Some(input) = &mut window {
                     let line = progress_line(&progress.lock_anyway());
@@ -68,24 +72,29 @@ impl Watcher {
     }
 }
 
+/// Says a transfer from `who` could not even start (the other PC out of
+/// reach): the window, with why, and nothing to cancel.
+pub fn failed(who: &str, why: &str) {
+    if let Some(mut input) = open(who, None) {
+        let _ = writeln!(input, "{}", ended_line(&Ended::Failed(why.to_string())));
+    }
+}
+
 /// Opens the window, and closes `stop` when it says the owner cancelled;
 /// its input, to tell it how the transfer goes.
-fn open(who: &str, stop: &Link) -> Option<ChildStdin> {
+fn open(who: &str, stop: Option<&Link>) -> Option<ChildStdin> {
     let mut child = crate::window::ui_command(&["progress", who])
         .and_then(|mut ui| ui.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn())
         .inspect_err(|err| eprintln!("mickey: cannot show the transfer: {err}"))
         .ok()?;
-    let (input, stdout, stop) = (
-        child.stdin.take()?,
-        child.stdout.take()?,
-        stop.try_clone().ok()?,
-    );
+    let (input, stdout) = (child.stdin.take()?, child.stdout.take()?);
+    let stop = stop.and_then(|stop| stop.try_clone().ok());
     crate::threads::spawn("transfer cancel", move || {
         let cancelled = std::io::BufReader::new(stdout)
             .lines()
             .map_while(Result::ok)
             .any(|line| line == "cancel");
-        if cancelled {
+        if cancelled && let Some(stop) = stop {
             let _ = stop.shutdown();
         }
         let _ = child.wait();
