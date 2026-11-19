@@ -111,6 +111,11 @@ impl Transfers {
     /// the one before. The IP is left out: the receiving PC knows it.
     pub fn offer(&self, paths: &[PathBuf]) -> Result<FileOffer, String> {
         let listing = offer::list(paths)?;
+        // Nothing left to offer (the copied files were deleted or moved):
+        // the clipboard then carries what it can, as before.
+        if listing.entries.is_empty() {
+            return Err("none of the copied files is there any more".into());
+        }
         // How many, never their names: what is copied stays out of the log
         // (CONTRIBUTING, the clipboard); the names are for the window.
         if !listing.skipped.is_empty() {
@@ -144,6 +149,8 @@ impl Transfers {
         crate::threads::spawn("transfer fetch", move || {
             let before = keeper.read();
             match this.fetch_now(&offer, from) {
+                // Everything skipped by the other PC: nothing to paste.
+                Ok(landed) if landed.is_empty() => {}
                 Ok(landed) if keeper.read() == before => keeper.write(Content::Files(landed)),
                 Ok(landed) => println!(
                     "mickey: files arrived in {}, not pasted: something else was copied meanwhile",
@@ -275,6 +282,25 @@ mod tests {
             peers.add(key, "test").unwrap();
         }
         Arc::new(std::sync::Mutex::new(peers))
+    }
+
+    #[test]
+    fn copied_files_that_are_gone_are_not_offered() {
+        let scratch =
+            Scratch(std::env::temp_dir().join(format!("mickey-gone-{}", std::process::id())));
+        let transfers = Transfers {
+            offers: Arc::new(Offers::default()),
+            identity: Arc::new(Identity::generate().unwrap()),
+            port: 1,
+            received: scratch.0.join("received"),
+            trusted: trusting(&scratch.0.join("trust"), None),
+        };
+        // Copied, then deleted before the keyboard crossed.
+        assert!(
+            transfers
+                .offer(&[scratch.0.join("deleted folder")])
+                .is_err()
+        );
     }
 
     #[test]
