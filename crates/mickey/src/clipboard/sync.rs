@@ -15,7 +15,8 @@ use std::time::Instant;
 /// `write`, which puts it in this PC's clipboard, if `may_write` allows it;
 /// when it does not, its error names the sending PC for the log (#436).
 /// Messages of kind 16 and up (the group map, the shared hotkeys) are not
-/// the clipboard's: they go to `other`, with their kind.
+/// the clipboard's: they go to `other`, with their kind; `TRANSFERS` is
+/// answered with the same (`ask_transfers`).
 pub fn answer(
     mut link: Link,
     may_read: impl Fn() -> bool,
@@ -34,7 +35,11 @@ pub fn answer(
         if let Some((&kind, text)) = bytes.split_first()
             && kind >= crate::net::group::KIND
         {
-            other(kind, &String::from_utf8_lossy(text));
+            if kind == crate::net::group::TRANSFERS {
+                link.send_bulk(&crate::net::group::tagged(kind, ""))?;
+            } else {
+                other(kind, &String::from_utf8_lossy(text));
+            }
             continue;
         }
         let message = wire::decode(&bytes).map_err(io::Error::other)?;
@@ -79,6 +84,49 @@ const ASK_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 /// How long a peer may stay silent while answering `Ask`. Per read: a big
 /// answer still arriving is not cut short.
 const ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How long a source waits, as a data link opens, for the target to say it
+/// knows file transfers: one that does answers at once, an older one never.
+const TRANSFERS_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The source's side of `TRANSFERS`, right after the link opens and before
+/// anything else is asked on it: says this side knows file transfers and
+/// whether the target answered that it does too.
+fn ask_transfers(link: &mut Link) -> io::Result<bool> {
+    let transfers = crate::net::group::TRANSFERS;
+    link.send_bulk(&crate::net::group::tagged(transfers, ""))?;
+    link.set_read_timeout(Some(TRANSFERS_WAIT))?;
+    let answer = link.recv_bulk();
+    link.set_read_timeout(Some(ANSWER_WAIT))?;
+    match answer {
+        Ok(bytes) => Ok(bytes == [transfers]),
+        // Nothing within the wait: an older Mickey.
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// The next clipboard message on `link`, past any tagged one (kind 16 and
+/// up): a `TRANSFERS` answer that came after `TRANSFERS_WAIT` must not be
+/// read as the answer to `Ask`.
+fn recv_clipboard(link: &mut Link) -> io::Result<Vec<u8>> {
+    loop {
+        let bytes = link.recv_bulk()?;
+        if bytes
+            .first()
+            .is_none_or(|&kind| kind < crate::net::group::KIND)
+        {
+            return Ok(bytes);
+        }
+    }
+}
 
 /// Grants come at most this often: a peer that says its keyboard came
 /// and went, over and over, cannot read the clipboard over and over.
@@ -236,6 +284,9 @@ impl DataLinks {
             // were shared.
             let mut map: Option<Vec<u8>> = None;
             let mut audio: Option<Vec<u8>> = None;
+            // The peers whose Mickey knows file transfers (PRD 0015): only
+            // they are ever sent an offer (#478).
+            let mut transfers: std::collections::HashSet<usize> = Default::default();
             for job in todo {
                 match job {
                     Job::Link(peer, mut link) => {
@@ -254,7 +305,13 @@ impl DataLinks {
                             .into_iter()
                             .flatten()
                             .all(|bytes| link.send_bulk(bytes).is_ok());
-                        if sent {
+                        let knows = sent.then(|| ask_transfers(&mut link));
+                        if let Some(Ok(knows)) = knows {
+                            if knows {
+                                transfers.insert(peer);
+                            } else {
+                                transfers.remove(&peer);
+                            }
                             links.insert(peer, link);
                         }
                     }
@@ -360,7 +417,7 @@ fn carry(
         Some(peer) => {
             let asked = links.get_mut(&peer).map(|link| {
                 link.send_bulk(&wire::encode(&Wire::Ask).map_err(io::Error::other)?)?;
-                wire::decode(&link.recv_bulk()?).map_err(io::Error::other)
+                wire::decode(&recv_clipboard(link)?).map_err(io::Error::other)
             });
             match asked {
                 Some(Ok(Wire::Content(content))) => Some(content),
@@ -502,6 +559,53 @@ mod tests {
             *written.lock().unwrap(),
             [Content::Text("from the source".into())]
         );
+    }
+
+    #[test]
+    fn a_target_says_it_knows_transfers_and_the_clipboard_goes_on() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let target = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            let _ = answer(
+                link,
+                || true,
+                || Some(Content::Text("copied".into())),
+                || Ok(()),
+                |_| {},
+                |_, _| {},
+                || true,
+            );
+        });
+        let stream = TcpStream::connect(addr).unwrap();
+        let mut link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
+        assert!(ask_transfers(&mut link).unwrap());
+        link.send_bulk(&wire::encode(&Wire::Ask).unwrap()).unwrap();
+        let reply = wire::decode(&link.recv_bulk().unwrap()).unwrap();
+        assert_eq!(reply, Wire::Content(Content::Text("copied".into())));
+        drop(link);
+        target.join().unwrap();
+    }
+
+    #[test]
+    fn an_older_target_that_says_nothing_does_not_know_transfers() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let target = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            // As an older Mickey: it reads the message and answers nothing.
+            let _ = link.recv_bulk();
+            let _ = link.recv_bulk();
+        });
+        let stream = TcpStream::connect(addr).unwrap();
+        let mut link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
+        let started = Instant::now();
+        assert!(!ask_transfers(&mut link).unwrap());
+        assert!(started.elapsed() < TRANSFERS_WAIT * 2);
+        drop(link);
+        target.join().unwrap();
     }
 
     #[test]
