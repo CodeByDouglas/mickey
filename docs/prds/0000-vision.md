@@ -168,6 +168,7 @@ Order agreed with the owner on 2026-10-21: secure link, then steps 1–4.
 | Tray | Tray icon | [0009](0009-tray-icon.md) | An icon in the system tray of every PC, with a green or red dot for "the keyboard and mouse are here", and a menu of PCs |
 | Pairing | Connect without a terminal | [0010](0010-easy-pairing.md) | PCs find each other on the LAN; the same six-digit code on both screens; Accept in a window; no restart |
 | Clipboard | Shared clipboard and history | [0011](0011-shared-clipboard.md) | Copy on one PC, paste on another (text, images, files) and a history of every PC's copies; synced when the keyboard crosses, big things on paste, on a second link |
+| Files | Big files and folders | [0015](0015-file-transfer.md) | Copy a folder of any size on one PC, paste it on another: streamed, verified, resumable, with progress |
 | M2 | Any desktop | 0004 (todo) | Native backends (wlroots, portals, X11); Windows as the source |
 
 ### Later (unordered, not committed)

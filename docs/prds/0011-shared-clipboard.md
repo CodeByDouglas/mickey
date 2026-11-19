@@ -46,7 +46,9 @@ recent copies.
 4. **History**: Mickey watches the clipboard on every PC, keeps the
    recent entries in memory (not on disk unless the owner turns it on),
    and a `mickey-ui` window lists them with search; picking one copies it.
-5. **Files**: sent whole on crossing, up to 60 MB. Sending big files and folders on purpose is #431.
+5. **Files**: sent whole on crossing, up to 60 MB. Big files and folders,
+   streamed and verified, are [0015](0015-file-transfer.md) (#431), which
+   replaces this path.
 6. **Other managers**: when the owner prefers cliphist or another
    manager, Mickey only syncs and leaves the history to it (what Mickey
    writes into the clipboard already reaches those managers).
@@ -58,7 +60,7 @@ recent copies.
 - [x] Text and images synced when the keyboard crosses, sent whole.
 - [ ] Big content only when pasted (needs a spike first, #425; see *Discoveries*).
 - [x] History window (this PC's copies, including what arrived from others).
-- [x] Files (up to 60 MB per crossing, no folders yet).
+- [x] Files (up to 60 MB per crossing, no folders yet; any size and folders in [0015](0015-file-transfer.md)).
 - [x] Option to leave the history to an existing manager (`[clipboard] history = false`, #134).
 - [x] Option to turn sharing off (`[clipboard] share = "off"`, #437).
 - [ ] Option to share only on a hotkey (#437, a later PR).
