@@ -339,3 +339,15 @@ them carry `Co-authored-by`.
   same delay on its short messages: #485.
 - **The "still here" message** moves to #474, where the transfer's
   session loop is; #472 sets the read timeout (15 s).
+- **A file that changed is skipped, not sent again** (#474): the offer
+  fixed its size, and the receiving PC never writes past it, so sending
+  the new version would need a new offer. It is listed as *changed* in the
+  summary; copying again makes a new offer. A file that changes while it
+  is sent is checked again after its bytes and skipped the same way.
+- **The hash covers the whole file**, also when resuming: the sending PC
+  reads (without sending) the bytes the other PC already has.
+- **#474 is split in two**: sending and receiving (hashes, `.part`, `name
+  (2)`), then free space and its margin. The "still here" message moves
+  to #475: only re-hashing a big `.part` keeps a side silent for long.
+  Starting the listener, and opening TCP 4244 in the installers, moves to
+  #478, where there is an offer to serve.
