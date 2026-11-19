@@ -67,6 +67,29 @@ impl Link {
         self.stream.set_read_timeout(timeout)
     }
 
+    /// Whether the peer sends something within `wait`, without reading it:
+    /// a wait that ends while a message is half read would leave the link
+    /// out of step, a peek never does. The read timeout is left as it was.
+    pub fn sends_within(&self, wait: Duration) -> io::Result<bool> {
+        let before = self.stream.read_timeout()?;
+        self.stream.set_read_timeout(Some(wait))?;
+        let peeked = self.stream.peek(&mut [0u8; 1]);
+        self.stream.set_read_timeout(before)?;
+        match peeked {
+            Ok(0) => Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok(_) => Ok(true),
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     /// Closes the connection both ways, waking whoever is reading it.
     pub fn shutdown(&self) -> io::Result<()> {
         self.stream.shutdown(std::net::Shutdown::Both)

@@ -37,6 +37,12 @@ pub const AUDIO_KEY: u8 = 22;
 /// The first byte of the sender's Mickey version (PRD 0013), sent as its
 /// data link opens, so every PC knows which PCs are behind.
 pub const VERSION: u8 = 23;
+/// "I know file transfers" (PRD 0015, #478): a source sends it as its data
+/// link opens, and a target that knows them too answers with the same, so
+/// neither ever sends transfer messages to an older Mickey (which would
+/// close the link). A capability, not a version: builds of one version
+/// differ while it is being made.
+pub const TRANSFERS: u8 = 24;
 
 /// Whether `ip` is on a local network: private IPv4 ranges, link-local,
 /// the 100.64.0.0/10 range VPNs such as Tailscale use, IPv6 unique-local

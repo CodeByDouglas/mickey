@@ -123,22 +123,25 @@ pub fn accept_transfer(
     accept_paired(stream, identity, trusted, Bulk::Transfer)
 }
 
-/// The two kinds of bulk connection, which differ in how they are tuned.
+/// The two kinds of bulk connection, which differ in how long a read may
+/// wait.
 #[derive(Clone, Copy)]
 enum Bulk {
     /// The data link: waits for ever, as before (#452 closes old ones).
     Data,
-    /// A transfer: reads give up after `TRANSFER_SILENT`, and short
-    /// messages leave at once (`TCP_NODELAY`). Without it, every handshake
-    /// and every "send me the next file" waits for the peer's delayed
-    /// acknowledgement: measured on localhost, a handshake took 44 ms
-    /// instead of 2 ms, which over 10 000 small files would add minutes.
+    /// A transfer: reads give up after `TRANSFER_SILENT`.
     Transfer,
 }
 
 impl Bulk {
+    /// Both send short messages that leave at once (`TCP_NODELAY`). Without
+    /// it, a short message written right after another waits for the
+    /// peer's delayed acknowledgement, and a bulk payload is two messages
+    /// (its length, then its bytes). Measured on localhost, release build:
+    /// a clipboard ask and its short answer took 82 ms instead of 0.4 ms
+    /// (#485), a handshake 44 ms instead of 2 ms (#472).
     fn prepare(self, stream: &TcpStream) -> io::Result<()> {
-        stream.set_nodelay(matches!(self, Bulk::Transfer))?;
+        stream.set_nodelay(true)?;
         stream.set_write_timeout(Some(DATA_WRITE_TIMEOUT))
     }
 
@@ -860,6 +863,18 @@ mod tests {
         let err = theirs.recv_stream(&mut sink, 5).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(sink.is_empty());
+    }
+
+    #[test]
+    fn waiting_for_the_peer_reads_nothing() {
+        let (ours, theirs) = data_link(Identity::generate().unwrap(), true);
+        let (mut ours, mut theirs) = (ours.unwrap(), theirs.unwrap());
+        let short = Duration::from_millis(100);
+        assert!(!ours.sends_within(short).unwrap(), "nothing sent yet");
+        theirs.send_bulk(b"hello").unwrap();
+        assert!(ours.sends_within(short).unwrap());
+        assert!(ours.sends_within(short).unwrap(), "a peek reads nothing");
+        assert_eq!(ours.recv_bulk().unwrap(), b"hello");
     }
 
     #[test]

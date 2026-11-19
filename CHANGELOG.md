@@ -11,6 +11,9 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
+- What you copied arrives on the other PC faster: each crossing no longer
+  waits about a tenth of a second for the network.
+
 ## 0.5.0
 
 - Taps and two-finger scrolling on a laptop's touchpad now work while it

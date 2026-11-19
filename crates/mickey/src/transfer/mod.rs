@@ -9,6 +9,7 @@
 // Sending and receiving (#474) and the clipboard trigger (#478) use this.
 #![cfg_attr(not(test), expect(dead_code, reason = "used from #474 on"))]
 
+pub mod cleanup;
 pub mod hash;
 pub mod offer;
 pub mod offers;
