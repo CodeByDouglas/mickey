@@ -52,7 +52,7 @@ pub(super) fn serve_clipboard(
                 continue;
             };
             let Some(slot) = Slot::take(&slots, from.ip()) else {
-                super::slots::say_refused(&refused_said, from.ip());
+                super::slots::say_refused(&refused_said, from.ip(), super::slots::MAX_PER_ADDRESS);
                 continue;
             };
             let newest = newest.clone();

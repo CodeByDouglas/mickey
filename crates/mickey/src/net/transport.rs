@@ -83,9 +83,7 @@ const DATA_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Opens the data link to the target whose input link is at `input`.
 pub fn connect_data(input: SocketAddr, identity: &Identity) -> io::Result<Link> {
-    let stream = TcpStream::connect_timeout(&data_address(input), CONNECT_TIMEOUT)?;
-    stream.set_write_timeout(Some(DATA_WRITE_TIMEOUT))?;
-    Link::initiate(stream, identity)
+    connect_paired(data_address(input), identity, Bulk::Data)
 }
 
 /// The target's side of a data link. Only a PC already paired may open
@@ -95,14 +93,98 @@ pub fn accept_data(
     identity: &Identity,
     trusted: impl Fn(&[u8; 32]) -> bool,
 ) -> io::Result<Link> {
-    stream.set_write_timeout(Some(DATA_WRITE_TIMEOUT))?;
+    accept_paired(stream, identity, trusted, Bulk::Data)
+}
+
+/// Transfers (PRD 0015) listen on the port after the data link's: the data
+/// port keeps one link per PC (#452), and a transfer must not close it.
+#[cfg_attr(not(test), expect(dead_code, reason = "transfers listen from #474 on"))]
+pub fn transfer_address(input: SocketAddr) -> SocketAddr {
+    SocketAddr::new(input.ip(), input.port().wrapping_add(2))
+}
+
+/// A transfer whose peer says nothing for this long has lost it (asleep,
+/// unplugged): it pauses, to resume later, instead of waiting for ever.
+/// Both sides send something more often than this while a transfer is on.
+pub const TRANSFER_SILENT: Duration = Duration::from_secs(15);
+
+/// Opens a transfer connection to the PC whose input link is at `input`.
+#[cfg_attr(not(test), expect(dead_code, reason = "transfers fetch from #474 on"))]
+pub fn connect_transfer(input: SocketAddr, identity: &Identity) -> io::Result<Link> {
+    connect_paired(transfer_address(input), identity, Bulk::Transfer)
+}
+
+/// The side that serves a transfer. Like a data link, only a paired PC
+/// may open one.
+#[cfg_attr(not(test), expect(dead_code, reason = "transfers listen from #474 on"))]
+pub fn accept_transfer(
+    stream: TcpStream,
+    identity: &Identity,
+    trusted: impl Fn(&[u8; 32]) -> bool,
+) -> io::Result<Link> {
+    accept_paired(stream, identity, trusted, Bulk::Transfer)
+}
+
+/// The two kinds of bulk connection, which differ in how they are tuned.
+#[derive(Clone, Copy)]
+enum Bulk {
+    /// The data link: waits for ever, as before (#452 closes old ones).
+    Data,
+    /// A transfer: reads give up after `TRANSFER_SILENT`, and short
+    /// messages leave at once (`TCP_NODELAY`). Without it, every handshake
+    /// and every "send me the next file" waits for the peer's delayed
+    /// acknowledgement: measured on localhost, a handshake took 44 ms
+    /// instead of 2 ms, which over 10 000 small files would add minutes.
+    Transfer,
+}
+
+impl Bulk {
+    fn prepare(self, stream: &TcpStream) -> io::Result<()> {
+        stream.set_nodelay(matches!(self, Bulk::Transfer))?;
+        stream.set_write_timeout(Some(DATA_WRITE_TIMEOUT))
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Bulk::Data => "data link",
+            Bulk::Transfer => "transfer",
+        }
+    }
+
+    fn silent(self) -> Option<Duration> {
+        match self {
+            Bulk::Data => None,
+            Bulk::Transfer => Some(TRANSFER_SILENT),
+        }
+    }
+}
+
+/// A secure link to `addr` for bulk data.
+fn connect_paired(addr: SocketAddr, identity: &Identity, bulk: Bulk) -> io::Result<Link> {
+    let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)?;
+    bulk.prepare(&stream)?;
+    let link = Link::initiate(stream, identity)?;
+    link.set_read_timeout(bulk.silent())?;
+    Ok(link)
+}
+
+/// The listening side of `connect_paired`: refuses a PC that is not
+/// paired, after the handshake that proves its key.
+fn accept_paired(
+    stream: TcpStream,
+    identity: &Identity,
+    trusted: impl Fn(&[u8; 32]) -> bool,
+    bulk: Bulk,
+) -> io::Result<Link> {
+    bulk.prepare(&stream)?;
     let link = Link::respond(stream, identity)?;
     if !trusted(link.peer_key()) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "a PC that is not paired asked for a data link",
+            format!("a PC that is not paired asked for a {}", bulk.name()),
         ));
     }
+    link.set_read_timeout(bulk.silent())?;
     Ok(link)
 }
 
@@ -786,6 +868,41 @@ mod tests {
     fn a_pc_not_paired_gets_no_data_link() {
         let (_, theirs) = data_link(Identity::generate().unwrap(), false);
         assert!(matches!(theirs, Err(err) if err.kind() == io::ErrorKind::PermissionDenied));
+    }
+
+    #[test]
+    fn transfers_are_on_the_port_after_the_data_link() {
+        assert_eq!(
+            transfer_address("192.0.2.7:4242".parse().unwrap()),
+            "192.0.2.7:4244".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_silent_peer_ends_a_read_after_the_timeout() {
+        let (listener, addr) = listener();
+        let target = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut link =
+                accept_transfer(stream, &Identity::generate().unwrap(), |_| true).unwrap();
+            assert_eq!(Bulk::Transfer.silent(), Some(TRANSFER_SILENT));
+            // As `accept_transfer` sets it, only shorter for the test.
+            link.set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            let started = Instant::now();
+            let err = link.recv_bulk().unwrap_err();
+            (err.kind(), started.elapsed())
+        });
+        let _ours = Link::initiate(
+            TcpStream::connect(addr).unwrap(),
+            &Identity::generate().unwrap(),
+        );
+        let (kind, waited) = target.join().unwrap();
+        assert!(matches!(
+            kind,
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ));
+        assert!(waited < Duration::from_secs(2));
     }
 
     #[test]

@@ -11,4 +11,5 @@
 
 pub mod offer;
 pub mod path;
+pub mod serve;
 pub mod wire;
