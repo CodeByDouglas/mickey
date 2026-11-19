@@ -198,6 +198,7 @@ fn transfer() {
             index: 1,
             why: wire::Why::Gone,
         },
+        Message::StillHere,
     ];
     let seeds: Vec<Vec<u8>> = messages.iter().map(wire::encode).collect();
     hammer(

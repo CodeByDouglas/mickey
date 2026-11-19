@@ -1,7 +1,37 @@
 //! Hashing a file while it crosses, so it is read and written once: the
 //! sending PC hashes what it reads, the receiving PC what it writes.
 
+use crate::net::secure::Link;
+use crate::net::transport::TRANSFER_SILENT;
+use crate::transfer::wire::{self, Message};
 use std::io::{self, Read, Write};
+use std::time::Instant;
+
+/// Hashes the first `len` bytes of `reader` into `hasher`: the part of a
+/// file both PCs already have when a transfer resumes (#475). That can
+/// take a while for gigabytes, so it says `StillHere` on `link` every few
+/// seconds, well within `TRANSFER_SILENT`.
+pub fn hash_start(
+    mut reader: impl Read,
+    len: u64,
+    hasher: &mut blake3::Hasher,
+    link: &mut Link,
+) -> io::Result<()> {
+    let mut buf = vec![0u8; 1 << 20];
+    let mut left = len;
+    let mut said = Instant::now();
+    while left > 0 {
+        let piece = &mut buf[..left.min(1 << 20) as usize];
+        reader.read_exact(piece)?;
+        hasher.update(piece);
+        left -= piece.len() as u64;
+        if said.elapsed() >= TRANSFER_SILENT / 3 {
+            link.send_bulk(&wire::encode(&Message::StillHere))?;
+            said = Instant::now();
+        }
+    }
+    Ok(())
+}
 
 /// Reads from `inner` and hashes every byte read.
 pub struct HashRead<'a, R> {

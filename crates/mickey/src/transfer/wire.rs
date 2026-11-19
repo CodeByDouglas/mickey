@@ -9,6 +9,9 @@
 //! 2  File   file index: u32, size: u64; then the file's bytes as a stream
 //! 3  Hash   file index: u32, BLAKE3 of the whole file: 32 bytes
 //! 4  Skip   file index: u32, why: u8 (0 changed, 1 gone)
+//! 5  StillHere  (no body): sent every few seconds while a side reads a
+//!           big file without sending anything, so the other does not
+//!           give up
 //! ```
 //!
 //! For each file the fetching PC sends `Fetch`; the other answers `File`,
@@ -27,6 +30,7 @@ const FETCH: u8 = 1;
 const FILE: u8 = 2;
 const HASH: u8 = 3;
 const SKIP: u8 = 4;
+const STILL_HERE: u8 = 5;
 const FOLDER_ENTRY: u8 = 0;
 const FILE_ENTRY: u8 = 1;
 
@@ -56,6 +60,8 @@ pub enum Message {
         index: u32,
         why: Why,
     },
+    /// Nothing to say yet, but still here (`transport::TRANSFER_SILENT`).
+    StillHere,
 }
 
 /// Why a file is skipped.
@@ -105,6 +111,7 @@ pub fn encode(message: &Message) -> Vec<u8> {
             };
             [&[SKIP][..], &index.to_be_bytes(), &[why]].concat()
         }
+        Message::StillHere => vec![STILL_HERE],
     }
 }
 
@@ -133,6 +140,7 @@ pub fn decode(bytes: &[u8]) -> Result<Message, String> {
                 why => return Err(format!("unknown reason {why} to skip a file")),
             },
         },
+        STILL_HERE => Message::StillHere,
         kind => return Err(format!("unknown transfer message {kind}")),
     };
     if !body.0.is_empty() {
@@ -254,6 +262,7 @@ mod tests {
                 index: 5,
                 why: Why::Gone,
             },
+            Message::StillHere,
         ];
         for message in messages {
             assert_eq!(decode(&encode(&message)).unwrap(), message);

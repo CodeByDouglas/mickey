@@ -8,10 +8,10 @@
 
 use crate::fs::open;
 use crate::net::secure::Link;
-use crate::transfer::hash::HashRead;
+use crate::transfer::hash::{self, HashRead};
 use crate::transfer::offer::Listing;
 use crate::transfer::wire::{self, Message, Why};
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Seek, SeekFrom};
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -24,13 +24,11 @@ pub fn serve(link: &mut Link, listing: &Listing, offer: u64) -> io::Result<()> {
             Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(err) => return Err(err),
         };
-        let Message::Fetch {
-            offer: asked,
-            index,
-            from,
-        } = wire::decode(&bytes).map_err(invalid)?
-        else {
-            return Err(invalid("expected a fetch".into()));
+        let (asked, index, from) = match wire::decode(&bytes).map_err(invalid)? {
+            Message::Fetch { offer, index, from } => (offer, index, from),
+            // The other PC is re-reading what it has of a file.
+            Message::StillHere => continue,
+            _ => return Err(invalid("expected a fetch".into())),
         };
         if asked != offer {
             return Err(invalid("a fetch for another offer".into()));
@@ -56,7 +54,7 @@ fn send_file(
     from: u64,
 ) -> io::Result<()> {
     let skip = |link: &mut Link, why| send(link, &Message::Skip { index, why });
-    let Ok(mut file) = open::without_links(path) else {
+    let Ok(mut file) = open::to_read(path) else {
         return skip(link, Why::Gone);
     };
     if !unchanged(&file, size, modified) {
@@ -65,7 +63,7 @@ fn send_file(
     // The hash covers the whole file: the bytes before `from` (which the
     // other PC already has) are read and hashed, not sent.
     let mut hasher = blake3::Hasher::new();
-    io::copy(&mut (&mut file).take(from), &mut hasher)?;
+    hash::hash_start(&mut file, from, &mut hasher, link)?;
     file.seek(SeekFrom::Start(from))?;
     send(
         link,
