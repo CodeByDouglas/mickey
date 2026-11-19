@@ -6,11 +6,14 @@
 /// `name` if it is a plain file name, safe to join to a folder on any of
 /// Mickey's systems: Windows also refuses `<>"|?*`, a name ending in a dot
 /// or a space, and device names such as `CON` or `nul.txt`, which would
-/// open the device instead of a file.
+/// open the device instead of a file. The list is Windows' own (#483):
+/// its superscript digits (`COM¹`) and the console's `CONIN$` and
+/// `CONOUT$` are devices too.
 pub fn safe_name(name: &str) -> Option<&str> {
-    const DEVICES: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    const DEVICES: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM0", "COM1", "COM2", "COM3", "COM4",
+        "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT0", "LPT1", "LPT2",
+        "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
     ];
     let stem = name.split('.').next().unwrap_or("").trim_end();
     let bad = name.is_empty()
@@ -59,6 +62,11 @@ mod tests {
             "trailing ",
             "what?.txt",
             "a|b",
+            "COM¹",
+            "lpt³.log",
+            "CONIN$",
+            "conout$.txt",
+            "COM0",
         ] {
             assert_eq!(safe_name(bad), None, "{bad:?}");
         }
