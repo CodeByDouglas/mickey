@@ -188,7 +188,7 @@ clipboard's (`clipboard/wire.rs`); 16 and up are passed to the target's
 | 21 | Audio | the shared `[audio]` lines: `listener`, `volumes`, `muted`, `since` | S → T, on every new data link and after the owner changes them; taken only if newer than the receiver's (`since`) |
 | 22 | Audio key | a stream's id and key, in hex | S → T, to the PC that listens, when sending starts and every 2 s while it lasts |
 | 23 | Version | the sender's Mickey version, `0.2.1` (PRD 0013) | S → T, first on every new data link; shown only if it parses as a version; older Mickeys ignore it |
-| 24 | Transfers | (empty) "I know file transfers" (PRD 0015) | S → T after the version, map and listener on every new data link; a target that knows them answers T → S with the same at once, the only message a target sends unasked. The source waits 1 s for it; older Mickeys ignore it and answer nothing. A source skips tagged messages while waiting for an `Ask` answer |
+| 24 | Transfers | (empty) "I know file transfers" (PRD 0015) | S → T first on every new data link, before the version; a target that knows them answers T → S with the same at once. The source waits up to 1 s for an answer, on the thread that opened the link, with a peek, so a late answer is never left half read; older Mickeys ignore it and answer nothing. A source skips tagged messages while waiting for an `Ask` answer |
 
 A group map line is `<public key, 64 hex>`, `<name>`, `<ip:port>` (or
 `:port` for the sender itself) and `<x,y>` or `-`, separated by tabs

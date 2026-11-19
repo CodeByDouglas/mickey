@@ -865,6 +865,18 @@ mod tests {
     }
 
     #[test]
+    fn waiting_for_the_peer_reads_nothing() {
+        let (ours, theirs) = data_link(Identity::generate().unwrap(), true);
+        let (mut ours, mut theirs) = (ours.unwrap(), theirs.unwrap());
+        let short = Duration::from_millis(100);
+        assert!(!ours.sends_within(short).unwrap(), "nothing sent yet");
+        theirs.send_bulk(b"hello").unwrap();
+        assert!(ours.sends_within(short).unwrap());
+        assert!(ours.sends_within(short).unwrap(), "a peek reads nothing");
+        assert_eq!(ours.recv_bulk().unwrap(), b"hello");
+    }
+
+    #[test]
     fn a_pc_not_paired_gets_no_data_link() {
         let (_, theirs) = data_link(Identity::generate().unwrap(), false);
         assert!(matches!(theirs, Err(err) if err.kind() == io::ErrorKind::PermissionDenied));

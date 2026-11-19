@@ -89,28 +89,21 @@ const ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// knows file transfers: one that does answers at once, an older one never.
 const TRANSFERS_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// The source's side of `TRANSFERS`, right after the link opens and before
-/// anything else is asked on it: says this side knows file transfers and
-/// whether the target answered that it does too.
-fn ask_transfers(link: &mut Link) -> io::Result<bool> {
+/// The source's side of `TRANSFERS`, as the link opens and before anything
+/// is asked on it: says this side knows file transfers, and whether the
+/// target answered that it does too. Run where the link is opened, so the
+/// wait for an older Mickey holds up no clipboard.
+pub fn ask_transfers(link: &mut Link) -> io::Result<bool> {
     let transfers = crate::net::group::TRANSFERS;
     link.send_bulk(&crate::net::group::tagged(transfers, ""))?;
-    link.set_read_timeout(Some(TRANSFERS_WAIT))?;
-    let answer = link.recv_bulk();
-    link.set_read_timeout(Some(ANSWER_WAIT))?;
-    match answer {
-        Ok(bytes) => Ok(bytes == [transfers]),
-        // Nothing within the wait: an older Mickey.
-        Err(err)
-            if matches!(
-                err.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ) =>
-        {
-            Ok(false)
-        }
-        Err(err) => Err(err),
+    // Nothing within the wait: an older Mickey. Something: the answer, read
+    // whole (a target answers nothing else unasked).
+    if !link.sends_within(TRANSFERS_WAIT)? {
+        return Ok(false);
     }
+    // Once begun, an answer still arriving gets as long as any other.
+    link.set_read_timeout(Some(ANSWER_WAIT))?;
+    Ok(link.recv_bulk()? == [transfers])
 }
 
 /// The next clipboard message on `link`, past any tagged one (kind 16 and
@@ -258,8 +251,9 @@ fn save(files: Vec<(String, Vec<u8>)>) -> Option<Vec<std::path::PathBuf>> {
 pub struct DataLinks(Sender<Job>);
 
 enum Job {
-    /// A data link to this peer is open.
-    Link(usize, Link),
+    /// A data link to this peer is open; whether the peer knows file
+    /// transfers (`ask_transfers`).
+    Link(usize, Link, bool),
     /// The group map changed: send it to every peer (PRD 0010).
     Map(Vec<u8>),
     /// Send this to every peer once (the shared hotkeys).
@@ -289,7 +283,7 @@ impl DataLinks {
             let mut transfers: std::collections::HashSet<usize> = Default::default();
             for job in todo {
                 match job {
-                    Job::Link(peer, mut link) => {
+                    Job::Link(peer, mut link, knows) => {
                         // A peer that goes silent mid-answer (lid closed,
                         // Wi-Fi gone) must not hold this one thread, and
                         // every clipboard after it, for good: a read waits
@@ -305,8 +299,7 @@ impl DataLinks {
                             .into_iter()
                             .flatten()
                             .all(|bytes| link.send_bulk(bytes).is_ok());
-                        let knows = sent.then(|| ask_transfers(&mut link));
-                        if let Some(Ok(knows)) = knows {
+                        if sent {
                             if knows {
                                 transfers.insert(peer);
                             } else {
@@ -340,8 +333,8 @@ impl DataLinks {
         DataLinks(jobs)
     }
 
-    pub fn link(&self, peer: usize, link: Link) {
-        let _ = self.0.send(Job::Link(peer, link));
+    pub fn link(&self, peer: usize, link: Link, knows_transfers: bool) {
+        let _ = self.0.send(Job::Link(peer, link, knows_transfers));
     }
 
     /// Shares the group map with every peer, now and as links open.
