@@ -14,14 +14,17 @@
 
 use crate::net::secure::Link;
 use crate::platform::space;
+use crate::threads::LockAnyway;
 use crate::transfer::hash::{self, HashWrite};
 use crate::transfer::offer::{Kind, Offer};
 use crate::transfer::path;
+use crate::transfer::progress::{self, Counted, Progress, Stage};
 use crate::transfer::room::{self, Guarded};
 use crate::transfer::wire::{self, Message, Why};
 use std::collections::HashSet;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// What a transfer brought, for the owner to see.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -48,31 +51,51 @@ pub struct Fetched {
     /// that appears at one of its names meanwhile is the owner's.
     claimed: HashSet<PathBuf>,
     pub summary: Summary,
+    /// For the window to show while it runs.
+    pub progress: progress::Shared,
 }
 
 /// Fetches every file of `offer` into the folder `into`, or what is left of
 /// it if `fetched` comes from an attempt that broke. A copied file or
 /// folder whose name is taken there gets `name (2)`, never overwriting.
 pub fn fetch(link: &mut Link, offer: &Offer, into: &Path, fetched: &mut Fetched) -> io::Result<()> {
+    let result = fetch_all(link, offer, into, fetched);
+    fetched.progress.lock_anyway().stage = match result {
+        Ok(()) => Stage::Done,
+        Err(_) => Stage::Paused,
+    };
+    result
+}
+
+fn fetch_all(link: &mut Link, offer: &Offer, into: &Path, fetched: &mut Fetched) -> io::Result<()> {
+    fetched.progress.lock_anyway().stage = Stage::CheckingSpace;
     let places = offer
         .entries
         .iter()
         .map(|entry| place(&entry.path, entry.kind, into, &mut fetched.tops))
         .collect::<io::Result<Vec<(PathBuf, PathBuf)>>>()?;
     // Nothing more is written unless what is left fits, with the margin.
-    let mut need = 0u64;
+    let (mut need, mut total) = (0u64, 0u64);
     for (index, entry) in offer.entries.iter().enumerate() {
-        if let Kind::File { size } = entry.kind
-            && !fetched.finished.contains(&index)
-        {
-            let kept = kept(fetched, index, &places[index].1, size).unwrap_or(0);
-            need = need.saturating_add(size - kept);
+        if let Kind::File { size } = entry.kind {
+            total = total.saturating_add(size);
+            if !fetched.finished.contains(&index) {
+                let kept = kept(fetched, index, &places[index].1, size).unwrap_or(0);
+                need = need.saturating_add(size - kept);
+            }
         }
+    }
+    {
+        let mut progress = fetched.progress.lock_anyway();
+        *progress = Progress::new(total);
+        progress.advance(total - need, std::time::Instant::now());
+        progress.stage = Stage::CheckingSpace;
     }
     let missing = room::missing(need, space::of(into)?);
     if missing > 0 {
         return Err(room::full(missing));
     }
+    fetched.progress.lock_anyway().stage = Stage::Transferring;
     for (index, entry) in offer.entries.iter().enumerate() {
         if fetched.finished.contains(&index) {
             continue;
@@ -87,12 +110,27 @@ pub fn fetch(link: &mut Link, offer: &Offer, into: &Path, fetched: &mut Fetched)
         if let Kind::File { size } = entry.kind {
             let wire_index = u32::try_from(index).map_err(|_| invalid("too many files".into()))?;
             let kept = kept(fetched, index, target, size);
-            match fetch_file(link, offer.id, wire_index, size, kept, target) {
+            match fetch_file(
+                link,
+                offer.id,
+                wire_index,
+                size,
+                kept,
+                target,
+                &fetched.progress,
+            ) {
                 Ok(None) => {
                     fetched.summary.files += 1;
                     fetched.summary.bytes += size;
                 }
-                Ok(Some(why)) => fetched.summary.skipped.push((entry.path.clone(), why)),
+                Ok(Some(why)) => {
+                    // Dealt with: what it would have taken counts as done.
+                    let mut progress = fetched.progress.lock_anyway();
+                    let done = progress.done + size - kept.unwrap_or(0);
+                    progress.advance(done, std::time::Instant::now());
+                    drop(progress);
+                    fetched.summary.skipped.push((entry.path.clone(), why));
+                }
                 Err(err) => {
                     // Kept for next time unless it was thrown away (damaged,
                     // or not this transfer's).
@@ -179,6 +217,7 @@ fn fetch_file(
     size: u64,
     kept: Option<u64>,
     target: &Path,
+    progress: &Mutex<Progress>,
 ) -> io::Result<Option<Why>> {
     if let Some(folder) = target.parent() {
         std::fs::create_dir_all(folder)?;
@@ -200,14 +239,24 @@ fn fetch_file(
         // hash covers the whole file: what is here is read again first.
         Some(from) => {
             let file = crate::fs::open::to_continue(&part)?;
+            progress.lock_anyway().stage = Stage::Rereading;
             hash::hash_start(&file, from, &mut hasher, link)?;
+            progress.lock_anyway().stage = Stage::Transferring;
             file.set_len(from)?;
             (file, from)
         }
     };
     send(link, &Message::Fetch { offer, index, from })?;
     let folder = part.parent().unwrap_or(&part);
-    let result = write_verified(link, index, size - from, file, from, hasher, folder);
+    let result = write_verified(
+        link,
+        index,
+        size - from,
+        (file, from),
+        hasher,
+        folder,
+        progress,
+    );
     // Thrown away if it was skipped or arrived damaged; kept (to resume)
     // if the network or the disk stopped it.
     if matches!(result, Ok(Some(_)))
@@ -237,17 +286,17 @@ fn fetch_file(
 }
 
 /// Receives the last `rest` bytes of the file at `index` into `file` (at
-/// byte `from`) while hashing them after what `hasher` has, and while the
-/// disk holding `folder` keeps its margin, then checks the hash the other
-/// PC sends after them.
+/// byte `from`) while hashing them after what `hasher` has, counting them
+/// in `progress`, and while the disk holding `folder` keeps its margin;
+/// then checks the hash the other PC sends after them.
 fn write_verified(
     link: &mut Link,
     index: u32,
     rest: u64,
-    mut file: std::fs::File,
-    from: u64,
+    (mut file, from): (std::fs::File, u64),
     mut hasher: blake3::Hasher,
     folder: &Path,
+    progress: &Mutex<Progress>,
 ) -> io::Result<Option<Why>> {
     match recv(link)? {
         Message::Skip { index: got, why } if got == index => return Ok(Some(why)),
@@ -256,7 +305,10 @@ fn write_verified(
     }
     io::Seek::seek(&mut file, io::SeekFrom::Start(from))?;
     let mut writer = HashWrite {
-        inner: Guarded::new(BufWriter::new(file), || space::of(folder)),
+        inner: Counted {
+            inner: Guarded::new(BufWriter::new(file), || space::of(folder)),
+            progress,
+        },
         hasher: &mut hasher,
     };
     link.recv_stream(&mut writer, rest)?;
@@ -548,6 +600,11 @@ mod tests {
         breaking.join().unwrap();
         let part = scratch.dest().join("docs/big.bin.part");
         assert_eq!(std::fs::metadata(&part).unwrap().len(), 300_000, "kept");
+        {
+            let progress = fetched.progress.lock_anyway();
+            assert_eq!(progress.stage, Stage::Paused);
+            assert_eq!((progress.done, progress.total), (300_000, 1_000_005));
+        }
         // The second attempt asks only for the rest (starting over would
         // fail: a new `.part` must not exist yet), and checks the whole.
         let (mut fetching, mut serving) = link_pair();
@@ -561,6 +618,9 @@ mod tests {
         assert!(!part.exists());
         assert_eq!(fetched.summary.files, 2);
         assert_eq!(fetched.summary.landed, [docs]);
+        let progress = fetched.progress.lock_anyway();
+        assert_eq!(progress.stage, Stage::Done);
+        assert_eq!(progress.done, progress.total);
     }
 
     #[test]
