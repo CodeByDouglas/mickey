@@ -1,4 +1,6 @@
-//! Where the switcher appears (PRD 0007): a corner or the center.
+//! Where Mickey's small windows appear: the switcher (PRD 0007) in its
+//! corner or the center, the history in the center, the question about
+//! bringing big files (PRD 0015) in the bottom-right corner.
 //!
 //! On Windows and X11 a program may place its own window. On Wayland only
 //! the compositor may, so Mickey asks it: on Hyprland with a window rule
@@ -112,6 +114,27 @@ impl Corner {
     }
 }
 
+/// Moves the window to `corner` of its screen, where a program may (Windows,
+/// X11), once the screen's and the window's sizes are known: `true` once
+/// it did, so it is done only once.
+pub fn move_to(ctx: &eframe::egui::Context, corner: Corner) -> bool {
+    let (screen, window) = ctx.input(|input| {
+        let viewport = input.viewport();
+        (
+            viewport.monitor_size,
+            viewport.outer_rect.map(|rect| rect.size()),
+        )
+    });
+    let (Some(screen), Some(window)) = (screen, window) else {
+        return false;
+    };
+    let [x, y] = corner.position([screen.x, screen.y], [window.x, window.y]);
+    ctx.send_viewport_cmd(eframe::egui::ViewportCommand::OuterPosition(
+        eframe::egui::pos2(x, y),
+    ));
+    true
+}
+
 /// Asks the compositor to place the window, where that is the only way.
 /// Returns `true` if it did, so the window should not try itself.
 pub fn ask_compositor(corner: Corner, app_id: &str) -> bool {
@@ -123,18 +146,19 @@ pub fn ask_compositor(corner: Corner, app_id: &str) -> bool {
     }
     let plasma = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| desktop.contains("KDE"));
     if plasma && std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        return kwin_place(&corner.kwin_script(app_id)).is_some();
+        return kwin_place(&corner.kwin_script(app_id), app_id).is_some();
     }
     false
 }
 
-/// Loads `script` into KWin (Plasma 6) through D-Bus and runs it, in place
-/// of the one an earlier switcher left: a script stays loaded until
-/// replaced, so it places every later window with that app id too.
-fn kwin_place(script: &str) -> Option<()> {
-    const NAME: &str = "mickey-switcher";
+/// Loads `script` into KWin (Plasma 6) through D-Bus and runs it, under
+/// the name `name`, in place of the one an earlier window with that name
+/// left: a script stays loaded until replaced, so it places every later
+/// window with that app id too. One per app id, so one window's script
+/// never replaces another's.
+fn kwin_place(script: &str, name: &str) -> Option<()> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, Into::into);
-    let path = std::path::Path::new(&dir).join("mickey-switcher.js");
+    let path = std::path::Path::new(&dir).join(format!("{name}.js"));
     std::fs::write(&path, script).ok()?;
     let call = |object: &str, method: &str, args: &[&str]| {
         Command::new("gdbus")
@@ -154,13 +178,13 @@ fn kwin_place(script: &str) -> Option<()> {
             .filter(|output| output.status.success())
             .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
     };
-    let _ = call("/Scripting", "org.kde.kwin.Scripting.unloadScript", &[NAME]);
+    let _ = call("/Scripting", "org.kde.kwin.Scripting.unloadScript", &[name]);
     let path = path.to_str()?;
     // Answers "(7,)": the new script's number, -1 if it was refused.
     let answer = call(
         "/Scripting",
         "org.kde.kwin.Scripting.loadScript",
-        &[path, NAME],
+        &[path, name],
     )?;
     let id: i32 = answer
         .trim()

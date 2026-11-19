@@ -38,10 +38,18 @@ struct Pair {
     who: String,
     ask: Ask,
     answer: Rc<Cell<bool>>,
+    /// The corner the window still has to move itself to, where the
+    /// compositor does not place it (Windows, X11).
+    place: Option<crate::place::Corner>,
 }
 
 impl eframe::App for Pair {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if let Some(corner) = self.place
+            && crate::place::move_to(ui.ctx(), corner)
+        {
+            self.place = None;
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 use crate::theme::{self, icon};
@@ -160,16 +168,26 @@ impl eframe::App for Pair {
 }
 
 pub fn window(who: &str, ask: Ask) -> ExitCode {
+    // Bring is a notice about files arriving: in the bottom-right corner,
+    // with an app id of its own for the compositor's rules. The others
+    // ask about trust, in the middle of the screen.
+    let (app_id, corner) = match &ask {
+        Ask::Bring { .. } => ("mickey-bring", Some(bring_corner())),
+        _ => ("mickey-pair", None),
+    };
+    let placed_by_compositor =
+        corner.is_some_and(|corner| crate::place::ask_compositor(corner, app_id));
+    let place = corner.filter(|_| !placed_by_compositor);
     let options = eframe::NativeOptions {
         viewport: crate::theme::viewport()
             .with_title(match ask {
                 Ask::Bring { .. } => i18n::t("pair.bring_window_title"),
                 _ => i18n::t("pair.window_title"),
             })
-            .with_app_id("mickey-pair")
-            // Bring lists up to five lines more than the other questions.
-            .with_inner_size(match ask {
-                Ask::Bring { .. } => [420.0, 340.0],
+            .with_app_id(app_id)
+            .with_inner_size(match &ask {
+                // Room for each line of what is brought (five at most).
+                Ask::Bring { what, .. } => [420.0, 200.0 + 28.0 * what.lines().count() as f32],
                 _ => [400.0, 260.0],
             })
             .with_resizable(false)
@@ -188,6 +206,7 @@ pub fn window(who: &str, ask: Ask) -> ExitCode {
                 who,
                 ask,
                 answer: window_answer,
+                place,
             }))
         }),
     );
@@ -199,4 +218,15 @@ pub fn window(who: &str, ask: Ask) -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// Where the owner wants the Bring question (`[interface] bring_position`),
+/// the bottom-right corner by default.
+fn bring_corner() -> crate::place::Corner {
+    let position = mickey_config::Config::load()
+        .ok()
+        .flatten()
+        .map(|config| config.interface.bring_position)
+        .unwrap_or_default();
+    crate::place::Corner::parse(&position).unwrap_or(crate::place::Corner::BottomRight)
 }

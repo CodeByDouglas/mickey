@@ -35,6 +35,8 @@ pub struct Form {
     /// How close the two taps must be, in milliseconds.
     pub double_tap_ms: u64,
     pub position: String,
+    /// Where the question about bringing big files appears.
+    pub bring_position: String,
     /// The switcher as a column.
     pub vertical: bool,
     /// Keep a clipboard history here: always, never (another manager keeps
@@ -97,6 +99,7 @@ impl Form {
                 .double_tap_ms
                 .unwrap_or(config::DEFAULT_DOUBLE_TAP_MS),
             position: config.interface.switcher_position.clone(),
+            bring_position: config.interface.bring_position.clone(),
             vertical: config.interface.switcher_vertical,
             history: config.clipboard.history,
             share: config.clipboard.share,
@@ -191,6 +194,13 @@ impl Form {
         );
         if self.vertical {
             out += "switcher_vertical = true\n";
+        }
+        // Written only when moved: the default stays out of config.toml.
+        if self.bring_position != config::Interface::default().bring_position {
+            out += &format!(
+                "bring_position = {}\n",
+                config::toml_string(&self.bring_position)
+            );
         }
         if !self.order.is_empty() {
             let names: Vec<String> = self

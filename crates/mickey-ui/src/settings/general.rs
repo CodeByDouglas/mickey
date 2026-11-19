@@ -122,6 +122,19 @@ impl Settings {
             });
         ui.weak(i18n::t("general.position_hint"));
         ui.add_space(8.0);
+        egui::ComboBox::from_label(i18n::t("general.bring_position"))
+            .selected_text(switcher_position_label(&form.bring_position))
+            .show_ui(ui, |ui| {
+                for position in SWITCHER_POSITIONS {
+                    ui.selectable_value(
+                        &mut form.bring_position,
+                        position.to_string(),
+                        switcher_position_label(position),
+                    );
+                }
+            });
+        ui.weak(i18n::t("general.bring_position_hint"));
+        ui.add_space(8.0);
         ui.checkbox(&mut form.vertical, i18n::t("general.column"));
         ui.add_space(8.0);
         switcher_order(ui, form);

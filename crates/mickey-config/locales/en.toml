@@ -122,6 +122,8 @@ off = "off"
 [general]
 switcher_position = "Switcher position"
 position_hint = "Where the switcher window appears when the hotkey opens it."
+bring_position = "Where files arrive from"
+bring_position_hint = "Where the question about bringing files over 1 GB from another PC appears."
 column = "Show the PCs in a column"
 order_in_switcher = "Order in the switcher"
 like_layout = "Like the layout"

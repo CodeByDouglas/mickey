@@ -368,6 +368,13 @@ pub fn parse(text: &str) -> Result<Config, String> {
             "this PC's name {name:?} must be 1 to 64 bytes, without tabs or line breaks"
         ));
     }
+    if !SWITCHER_POSITIONS.contains(&config.interface.bring_position.as_str()) {
+        return Err(format!(
+            "bring_position {:?} is not one of {}",
+            config.interface.bring_position,
+            SWITCHER_POSITIONS.join(", ")
+        ));
+    }
     if !SWITCHER_POSITIONS.contains(&config.interface.switcher_position.as_str()) {
         return Err(format!(
             "switcher_position {:?} is not one of {}",
@@ -709,6 +716,7 @@ mod tests {
         assert!(parse("[touchpad]\nspeed = 0\n").is_err());
         assert!(parse("[[peer]\n").is_err());
         assert!(parse("[interface]\nswitcher_position = \"middle\"\n").is_err());
+        assert!(parse("[interface]\nbring_position = \"middle\"\n").is_err());
         assert!(parse("[[peer]]\nname = \"a\\tb\"\naddress = \"192.0.2.10:1\"\n").is_err());
     }
 

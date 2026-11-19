@@ -48,22 +48,8 @@ struct Switcher {
 impl eframe::App for Switcher {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        if self.needs_placing {
-            let (screen, window) = ctx.input(|input| {
-                let viewport = input.viewport();
-                (
-                    viewport.monitor_size,
-                    viewport.outer_rect.map(|rect| rect.size()),
-                )
-            });
-            if let (Some(screen), Some(window)) = (screen, window) {
-                let [x, y] = self
-                    .choice
-                    .corner
-                    .position([screen.x, screen.y], [window.x, window.y]);
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
-                self.needs_placing = false;
-            }
+        if self.needs_placing && place::move_to(&ctx, self.choice.corner) {
+            self.needs_placing = false;
         }
         const DIGITS: [egui::Key; 10] = [
             egui::Key::Num0,

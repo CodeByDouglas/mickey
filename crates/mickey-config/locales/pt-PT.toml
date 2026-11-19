@@ -120,6 +120,8 @@ off = "desligado"
 [general]
 switcher_position = "Posição do comutador"
 position_hint = "Onde aparece a janela do comutador quando o atalho a abre."
+bring_position = "Aviso de ficheiros a chegar"
+bring_position_hint = "Onde aparece a pergunta sobre trazer ficheiros de mais de 1 GB de outro computador."
 column = "Mostrar os computadores em coluna"
 order_in_switcher = "Ordem no comutador"
 like_layout = "Como a disposição"
