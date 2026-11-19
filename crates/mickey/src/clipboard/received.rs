@@ -2,49 +2,15 @@
 //! clipboard can point at them: a fresh folder per transfer under Mickey's
 //! own cache folder. Only the last few transfers are kept.
 //!
-//! The names come from the network: a name that could leave the folder
-//! (`..`, a slash, a drive letter) is refused, never "cleaned up".
+//! The names come from the network: `fs::names` refuses any that could
+//! leave the folder.
 
+use crate::fs::names;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Transfers kept; older folders are removed.
 const KEEP: usize = 5;
-
-/// `name` if it is a plain file name, safe to join to a folder on any of
-/// Mickey's systems: Windows also refuses `<>"|?*`, a name ending in a dot
-/// or a space, and device names such as `CON` or `nul.txt`, which would
-/// open the device instead of a file.
-pub fn safe_name(name: &str) -> Option<&str> {
-    const DEVICES: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    ];
-    let stem = name.split('.').next().unwrap_or("").trim_end();
-    let bad = name.is_empty()
-        || name.len() > 255
-        || name.ends_with(['.', ' '])
-        || DEVICES
-            .iter()
-            .any(|device| stem.eq_ignore_ascii_case(device))
-        || name.chars().any(|c| {
-            matches!(
-                c,
-                '/' | '\\' | ':' | '\0' | '<' | '>' | '"' | '|' | '?' | '*'
-            ) || c.is_control()
-        });
-    (!bad).then_some(name)
-}
-
-/// Marks `path` as come from elsewhere (the Mark of the Web), so Windows
-/// warns before running it, as it does for a download.
-#[cfg(windows)]
-fn mark_as_downloaded(path: &Path) {
-    let mut stream = path.as_os_str().to_owned();
-    stream.push(":Zone.Identifier");
-    // ZoneId 3: the Internet zone.
-    let _ = std::fs::write(stream, "[ZoneTransfer]\r\nZoneId=3\r\n");
-}
 
 /// `~/.cache/mickey/received` on Linux, `%LOCALAPPDATA%\mickey\received`
 /// on Windows.
@@ -84,13 +50,13 @@ fn save_in(base: &Path, files: Vec<(String, Vec<u8>)>) -> Result<Vec<PathBuf>, S
     }
     let mut paths = Vec::new();
     for (name, bytes) in files {
-        let name = safe_name(&name)
+        let name = names::safe_name(&name)
             .ok_or_else(|| format!("refused a file name from the network: {name:?}"))?;
         let path = folder.join(name);
         std::fs::write(&path, bytes)
             .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
         #[cfg(windows)]
-        mark_as_downloaded(&path);
+        crate::fs::mark::as_downloaded(&path);
         paths.push(path);
     }
     prune(base);
@@ -131,38 +97,6 @@ fn prune(base: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_plain_names_are_safe() {
-        assert_eq!(safe_name("report.pdf"), Some("report.pdf"));
-        assert_eq!(safe_name("foto de férias.png"), Some("foto de férias.png"));
-        assert_eq!(
-            safe_name("console.txt"),
-            Some("console.txt"),
-            "only exact device names"
-        );
-        assert_eq!(safe_name(".bashrc"), Some(".bashrc"));
-        for bad in [
-            "",
-            ".",
-            "..",
-            "../etc/passwd",
-            "a/b",
-            "a\\b",
-            "C:evil",
-            "x\0y",
-            "tab\there",
-            "CON",
-            "nul.txt",
-            "Com1.log",
-            "trailing.",
-            "trailing ",
-            "what?.txt",
-            "a|b",
-        ] {
-            assert_eq!(safe_name(bad), None, "{bad:?}");
-        }
-    }
 
     #[test]
     fn files_land_in_a_fresh_folder_and_old_ones_go() {
