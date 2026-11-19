@@ -35,15 +35,7 @@ impl Identity {
 
     /// A new random identity, only in memory.
     pub fn generate() -> Result<Identity, String> {
-        let builder = snow::Builder::new(NOISE_PARAMS.parse().map_err(|err| format!("{err}"))?);
-        let keypair = builder
-            .generate_keypair()
-            .map_err(|err| format!("cannot generate a key: {err}"))?;
-        let private = keypair
-            .private
-            .try_into()
-            .map_err(|_| "unexpected private key length".to_string())?;
-        Identity::from_private(private)
+        Identity::from_private(random_bytes()?)
     }
 
     fn from_private(private: [u8; KEY_LEN]) -> Result<Identity, String> {
@@ -71,6 +63,20 @@ impl Identity {
     pub fn fingerprint(&self) -> String {
         fingerprint(&self.public)
     }
+}
+
+/// 32 random bytes from the system's secure generator, through snow (a
+/// new private key is exactly that), so no new dependency: for keys, the
+/// control socket's token, transfer offer ids.
+pub fn random_bytes() -> Result<[u8; KEY_LEN], String> {
+    let builder = snow::Builder::new(NOISE_PARAMS.parse().map_err(|err| format!("{err}"))?);
+    let keypair = builder
+        .generate_keypair()
+        .map_err(|err| format!("cannot generate a key: {err}"))?;
+    keypair
+        .private
+        .try_into()
+        .map_err(|_| "unexpected private key length".to_string())
 }
 
 /// Where identities and trusted peers live: `$XDG_DATA_HOME/mickey` (or

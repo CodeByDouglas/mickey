@@ -8,10 +8,6 @@ use std::path::Path;
 
 /// Opens `path` to read, refusing it if it is a link (or a junction on
 /// Windows) or anything but a plain file.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "file transfers send with it from #478 on")
-)]
 pub fn to_read(path: &Path) -> io::Result<File> {
     open(path, OpenOptions::new().read(true))
 }

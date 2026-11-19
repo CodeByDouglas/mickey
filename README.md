@@ -105,15 +105,18 @@ Download the latest release from the repository's
   `mickey-linux-x86_64.tar.gz` and run `./install.sh`. It asks for your
   password once: the `input` group and a udev rule let Mickey read your
   keyboard and create its virtual one, and if firewalld or ufw is on it
-  opens TCP 4242-4243 and UDP 4243-4244. Mickey goes to `~/.local/bin` and starts
+  opens TCP 4242-4244 and UDP 4243-4244. Mickey goes to `~/.local/bin` and starts
   with your desktop session. If it had to add you to the `input` group,
-  restart the PC once. `./uninstall.sh` removes everything.
+  restart the PC once. `./uninstall.sh` removes everything. Updating from
+  0.5.0 or older with a firewall on: Mickey updates itself without `sudo`,
+  so let in TCP 4244 (file transfers) once by hand, `sudo ufw allow
+  4244/tcp` or `sudo firewall-cmd --permanent --add-port=4244/tcp`.
 - **Debian, Ubuntu, Mint** or **Fedora**, for every user of the PC: the
   release's `mickey_<version>_amd64.deb` (`sudo apt install ./mickey_*.deb`)
   or `mickey-<version>-1.x86_64.rpm` (`sudo dnf install ./mickey-*.rpm`).
   They install under `/usr`, add the person who ran the command to the
   `input` group (restart once), and leave the firewall alone (open TCP
-  4242-4243 and UDP 4243-4244 if one is on). Update and remove them with
+  4242-4244 and UDP 4243-4244 if one is on). Update and remove them with
   `apt` or `dnf`; Mickey does not update itself then. Use the package or
   `install.sh`, not both.
 

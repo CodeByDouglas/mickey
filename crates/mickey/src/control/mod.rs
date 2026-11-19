@@ -380,15 +380,9 @@ mod endpoint {
     }
 
     /// 32 random bytes as hex, from the same generator the identity keys
-    /// use (snow, through the OS), so no new dependency.
+    /// use.
     fn random_token() -> Result<String, String> {
-        let params = crate::net::identity::NOISE_PARAMS
-            .parse()
-            .map_err(|err| format!("{err}"))?;
-        let keypair = snow::Builder::new(params)
-            .generate_keypair()
-            .map_err(|err| format!("{err}"))?;
-        Ok(crate::hex::encode(&keypair.private))
+        Ok(crate::hex::encode(&crate::net::identity::random_bytes()?))
     }
 }
 

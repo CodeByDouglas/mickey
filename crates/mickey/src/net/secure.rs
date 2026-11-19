@@ -196,10 +196,6 @@ impl Link {
     /// The lock is taken for each message, not the whole stream, so the
     /// peer's messages (a cancel, a "still here") still decrypt meanwhile.
     /// No other thread may send on this link until it returns.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "file transfers send with it from #474 on")
-    )]
     pub fn send_stream(&mut self, source: impl Read, length: u64) -> io::Result<()> {
         let noise = &self.noise;
         seal_stream(&mut self.stream, source, length, |plain, sealed| {

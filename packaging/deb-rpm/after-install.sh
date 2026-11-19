@@ -17,5 +17,5 @@ if [ -n "$person" ] && [ "$person" != root ] && ! id -nG "$person" | grep -qw in
 fi
 echo "Mickey: every program run by a member of the input group can read the"
 echo "keyboard, not only Mickey. Other users: sudo usermod -aG input <user>."
-echo "With a firewall on, let in TCP 4242-4243 and UDP 4243-4244."
+echo "With a firewall on, let in TCP 4242-4244 and UDP 4243-4244."
 exit 0

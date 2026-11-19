@@ -369,7 +369,7 @@ fn run_from_config() -> Result<(), String> {
     // Just updated: show what changed, once. Before the identity is made,
     // so a first install is told apart.
     crate::whats_new::after_update(&identity::data_dir()?);
-    let identity = identity::Identity::load_or_create(&identity::data_dir()?)?;
+    let identity = std::sync::Arc::new(identity::Identity::load_or_create(&identity::data_dir()?)?);
     let me = discovery::Announce {
         name: this_pc.name(),
         port: this_pc.listen.port(),
@@ -398,6 +398,10 @@ fn run_from_config() -> Result<(), String> {
     // One list of trusted PCs for the source and the target.
     let trusted = trust::shared(&trust::dir()?)?;
     trust::follow(&trusted, &trust::dir()?);
+    // Other PCs fetch the files copied here (PRD 0015), whether this PC
+    // controls others, is controlled, or both.
+    let offers = std::sync::Arc::new(crate::transfer::offers::Offers::default());
+    crate::transfer::serve::start(this_pc.listen, identity, trusted.clone(), offers);
     // One clipboard for the whole process (PRD 0011).
     let keeper = clipboard::Keeper::start()
         .inspect_err(|err| eprintln!("mickey: {err}; the clipboard will not be shared"))
