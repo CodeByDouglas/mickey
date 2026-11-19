@@ -312,4 +312,17 @@ them carry `Co-authored-by`.
 
 ## Discoveries
 
-*(none yet)*
+- **The version check moves to the clipboard trigger** (#478, not #473):
+  it belongs where two PCs decide to use transfers, and it touches the
+  input link's protocol, which the offer code leaves alone.
+- **At most 100 000 entries per offer** (#473). With paths of up to 200
+  bytes the encoded offer stays under the 64 MiB bulk limit; a bigger
+  tree (a `node_modules`) is refused. The upgrade path is sending the
+  offer in pages.
+- **The offer id** is a hash of paths, sizes and modification times made
+  with the standard library's hasher: only the PC that made the offer
+  computes it, so it need not match across versions.
+- **Names that are not UTF-8** (possible on Linux) are skipped as bad
+  names: the other PC could not write them the same way.
+- **The daemon → window channel** (#476) is built with the queue window
+  (#477), its first user, instead of on its own.
