@@ -11,10 +11,11 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
-- Copied folders, and files of any size up to 1 GB, now cross with copy
-  and paste: they arrive checked, and Ctrl+V pastes them once they are all
-  there. Links inside a folder are left out. With a firewall on, let in
-  TCP 4244.
+- Copied folders, and files of any size, now cross with copy and paste:
+  they arrive checked, and Ctrl+V pastes them once they are all there.
+  Over 1 GB a small window asks first whether to bring them, into
+  Downloads/Mickey; where it appears is in Settings > General. Links
+  inside a folder are left out. With a firewall on, let in TCP 4244.
 - What you copied arrives on the other PC faster: each crossing no longer
   waits about a tenth of a second for the network.
 
