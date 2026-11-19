@@ -167,10 +167,10 @@ and both the clipboard and the transfer use them from there.
 
 ### The connection
 
-- **One connection per transfer**, opened by PC B to PC A's data port
-  (the existing listener on the input port + 1, no new port), with the
-  same Noise `XX` handshake and the same check that only a paired PC may
-  open one. The clipboard keeps its own data link, so a 4 GB transfer
+- **One connection per transfer**, opened by PC B to PC A's transfer
+  port (the input port + 2, TCP 4244 by default; see *Discoveries*), with
+  the same Noise `XX` handshake and the same check that only a paired PC
+  may open one. The clipboard keeps its own data link, so a 4 GB transfer
   never holds a small copy behind it.
 - At most **2 transfer connections per PC**; more are refused.
 - A **read timeout and a periodic "still here" message**: a PC that went
@@ -326,3 +326,16 @@ them carry `Co-authored-by`.
   names: the other PC could not write them the same way.
 - **The daemon → window channel** (#476) is built with the queue window
   (#477), its first user, instead of on its own.
+- **Transfers have a port of their own** (#472, decided 2026-11-19): the
+  input port + 2, TCP 4244 by default. The data port keeps one link per
+  PC and a new one closes the older (#452), so a transfer there would
+  drop the clipboard. Windows' firewall rule is per program; the Linux
+  installers open TCP 4244 in the PR that starts the listener (#474).
+- **A handshake costs 2 ms, with `TCP_NODELAY`** (#472, localhost,
+  release build, median of 200): 44 ms without it, the peer's delayed
+  acknowledgement holding each short handshake message back. Transfer
+  connections set it, since every file also starts with a short request;
+  one connection per transfer stays. The clipboard's data link has the
+  same delay on its short messages: #485.
+- **The "still here" message** moves to #474, where the transfer's
+  session loop is; #472 sets the read timeout (15 s).

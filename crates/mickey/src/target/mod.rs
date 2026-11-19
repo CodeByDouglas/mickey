@@ -1,7 +1,7 @@
 //! The target: this PC driven by a source's keyboard and mouse.
 
 mod data;
-mod slots;
+pub(crate) mod slots;
 
 use data::serve_clipboard;
 use slots::{SharedSlots, Slot};
@@ -77,7 +77,7 @@ pub fn target(
             monitors: monitors.clone(),
         };
         let Some(slot) = Slot::take(&input_slots, peer.ip()) else {
-            slots::say_refused(&refused_said, peer.ip());
+            slots::say_refused(&refused_said, peer.ip(), slots::MAX_PER_ADDRESS);
             continue;
         };
         crate::threads::try_spawn("serve source", move || {

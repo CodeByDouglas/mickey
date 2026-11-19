@@ -16,10 +16,11 @@ pub(super) const MAX_PER_ADDRESS: usize = 4;
 /// Says that a connection from `from` was refused for want of a slot, at
 /// most once a minute (`last`): silence made this hard to diagnose (#452),
 /// but a line per refusal would let anyone on the network flood the log.
-/// Says whether it logged.
-pub(super) fn say_refused(
+/// `per_address` is the port's limit per address. Says whether it logged.
+pub(crate) fn say_refused(
     last: &std::sync::Mutex<Option<std::time::Instant>>,
     from: std::net::IpAddr,
+    per_address: usize,
 ) -> bool {
     let mut last = last.lock_anyway();
     if last.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(60)) {
@@ -27,30 +28,39 @@ pub(super) fn say_refused(
     }
     *last = Some(std::time::Instant::now());
     eprintln!(
-        "mickey: refused a connection from {from}: too many open (at most {MAX_PER_ADDRESS} per address, {MAX_CONNECTIONS} in all); a silent one is let go after a few seconds"
+        "mickey: refused a connection from {from}: too many open (at most {per_address} per address, {MAX_CONNECTIONS} in all); a silent one is let go after a few seconds"
     );
     true
 }
 
 /// A port's connections: how many, and how many from each address.
 #[derive(Default)]
-pub(super) struct Slots {
+pub(crate) struct Slots {
     total: usize,
     by_address: std::collections::HashMap<std::net::IpAddr, usize>,
 }
 
-pub(super) type SharedSlots = std::sync::Arc<std::sync::Mutex<Slots>>;
+pub(crate) type SharedSlots = std::sync::Arc<std::sync::Mutex<Slots>>;
 
 /// One of a port's connections, given back when dropped.
-pub(super) struct Slot(SharedSlots, std::net::IpAddr);
+pub(crate) struct Slot(SharedSlots, std::net::IpAddr);
 
 impl Slot {
     /// `None` when the port already has `MAX_CONNECTIONS`, or this address
     /// `MAX_PER_ADDRESS`: the caller drops the stream, which closes it.
     pub(super) fn take(slots: &SharedSlots, from: std::net::IpAddr) -> Option<Slot> {
+        Slot::take_up_to(slots, from, MAX_PER_ADDRESS)
+    }
+
+    /// `take`, with at most `per_address` connections from one address.
+    pub(crate) fn take_up_to(
+        slots: &SharedSlots,
+        from: std::net::IpAddr,
+        per_address: usize,
+    ) -> Option<Slot> {
         let mut counts = slots.lock_anyway();
         let mine = counts.by_address.get(&from).copied().unwrap_or(0);
-        if counts.total >= MAX_CONNECTIONS || mine >= MAX_PER_ADDRESS {
+        if counts.total >= MAX_CONNECTIONS || mine >= per_address {
             return None;
         }
         counts.total += 1;
@@ -80,9 +90,12 @@ mod tests {
     fn a_refusal_is_said_at_most_once_a_minute() {
         let last = std::sync::Mutex::new(None);
         let from: std::net::IpAddr = "192.0.2.66".parse().unwrap();
-        assert!(say_refused(&last, from), "the first refusal is logged");
         assert!(
-            !say_refused(&last, from),
+            say_refused(&last, from, MAX_PER_ADDRESS),
+            "the first refusal is logged"
+        );
+        assert!(
+            !say_refused(&last, from, MAX_PER_ADDRESS),
             "the next ones that minute are not"
         );
     }
