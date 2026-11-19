@@ -123,6 +123,32 @@ impl Keeper {
         Ok(Keeper(jobs))
     }
 
+    /// A keeper of a clipboard in memory only, for tests: no system
+    /// clipboard, no display needed.
+    #[cfg(test)]
+    pub fn in_memory(start: Option<Content>) -> Keeper {
+        let (jobs, todo) = std::sync::mpsc::channel();
+        crate::threads::spawn("clipboard in memory", move || {
+            let mut held = start;
+            for job in todo {
+                match job {
+                    Job::Read(answer) => {
+                        let _ = answer.send(held.clone());
+                    }
+                    Job::ReadText(answer) => {
+                        let text = match &held {
+                            Some(Content::Text(text)) => Some(text.clone()),
+                            _ => None,
+                        };
+                        let _ = answer.send(text);
+                    }
+                    Job::Write(content) => held = Some(content),
+                }
+            }
+        });
+        Keeper(jobs)
+    }
+
     /// What is copied now; `None` also if the keeper is gone.
     pub fn read(&self) -> Option<Content> {
         let (answer, wait) = std::sync::mpsc::channel();

@@ -14,10 +14,6 @@ pub fn to_read(path: &Path) -> io::Result<File> {
 
 /// Opens `path` to read and write, the same way: a transfer continuing its
 /// own `.part` (#475) must not write through a link put in its place.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "file transfers resume with it from #478 on")
-)]
 pub fn to_continue(path: &Path) -> io::Result<File> {
     open(path, OpenOptions::new().read(true).write(true))
 }

@@ -16,13 +16,21 @@ use std::net::SocketAddr;
 type Newest =
     std::sync::Arc<std::sync::Mutex<std::collections::HashMap<[u8; 32], (u64, secure::Link)>>>;
 
+/// This PC's clipboard, and what it needs to fetch files offered to it
+/// (PRD 0015).
+#[derive(Clone)]
+pub(super) struct Clip {
+    pub keeper: clipboard::Keeper,
+    pub transfers: Option<std::sync::Arc<crate::transfer::trigger::Transfers>>,
+}
+
 /// Answers paired PCs' data links (PRD 0011) on the port after `listen`,
 /// each on its own thread, for as long as Mickey runs.
 pub(super) fn serve_clipboard(
     listen: SocketAddr,
     identity: &std::sync::Arc<identity::Identity>,
     trusted: &std::sync::Arc<std::sync::Mutex<trust::TrustedPeers>>,
-    keeper: clipboard::Keeper,
+    clip: Clip,
     target_news: &std::sync::mpsc::Sender<source::TargetNews>,
     sources: &Sources,
     grants: &clipboard::sync::Grants,
@@ -58,7 +66,7 @@ pub(super) fn serve_clipboard(
             let newest = newest.clone();
             opened += 1;
             let this = opened;
-            let (identity, trusted, keeper) = (identity.clone(), trusted.clone(), keeper.clone());
+            let (identity, trusted, clip) = (identity.clone(), trusted.clone(), clip.clone());
             let (target_news, sources, shown) =
                 (target_news.clone(), sources.clone(), shown.clone());
             let grants = grants.clone();
@@ -84,10 +92,15 @@ pub(super) fn serve_clipboard(
                         let payload = |kind: u8, text: &str| {
                             on_payload(kind, text, from, by, &target_news, &sources, &shown)
                         };
+                        let keeper = &clip.keeper;
                         let _ = clipboard::sync::answer(
                             link,
-                            || clipboard::sync::may_read(&grants, from),
-                            || keeper.read(),
+                            // Only right after the keyboard left this PC (#185).
+                            || {
+                                clipboard::sync::may_read(&grants, from)
+                                    .then(|| keeper.read())
+                                    .flatten()
+                            },
                             || {
                                 if clipboard::sync::may_write(&grants, from) {
                                     Ok(())
@@ -98,6 +111,7 @@ pub(super) fn serve_clipboard(
                             |content| keeper.write(content),
                             payload,
                             || trusted.lock_anyway().is_trusted(&by),
+                            clip.transfers.as_ref().map(|transfers| (transfers, keeper)),
                         );
                         // Ended: let go of its handle, unless a newer link
                         // from the same PC took its place already.

@@ -14,7 +14,7 @@ const KEEP: usize = 5;
 
 /// `~/.cache/mickey/received` on Linux, `%LOCALAPPDATA%\mickey\received`
 /// on Windows.
-fn base() -> Result<PathBuf, String> {
+pub fn base() -> Result<PathBuf, String> {
     let cache = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
     } else {
@@ -34,6 +34,33 @@ pub fn save(files: Vec<(String, Vec<u8>)>) -> Result<Vec<PathBuf>, String> {
 }
 
 fn save_in(base: &Path, files: Vec<(String, Vec<u8>)>) -> Result<Vec<PathBuf>, String> {
+    let folder = fresh_folder(base)?;
+    let mut paths = Vec::new();
+    for (name, bytes) in files {
+        let name = names::safe_name(&name)
+            .ok_or_else(|| format!("refused a file name from the network: {name:?}"))?;
+        let path = folder.join(name);
+        std::fs::write(&path, bytes)
+            .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
+        #[cfg(windows)]
+        crate::fs::mark::as_downloaded(&path);
+        paths.push(path);
+    }
+    prune(base);
+    Ok(paths)
+}
+
+/// A new, empty folder for one transfer's files (PRD 0015), under `base`
+/// with the other received ones; the oldest beyond the last few go.
+pub fn new_folder(base: &Path) -> Result<PathBuf, String> {
+    let folder = fresh_folder(base)?;
+    prune(base);
+    Ok(folder)
+}
+
+/// A new folder under `base`, named by the time, that only this user may
+/// open.
+fn fresh_folder(base: &Path) -> Result<PathBuf, String> {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
@@ -48,19 +75,7 @@ fn save_in(base: &Path, files: Vec<(String, Vec<u8>)>) -> Result<Vec<PathBuf>, S
         std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o700))
             .map_err(|err| format!("cannot protect {}: {err}", base.display()))?;
     }
-    let mut paths = Vec::new();
-    for (name, bytes) in files {
-        let name = names::safe_name(&name)
-            .ok_or_else(|| format!("refused a file name from the network: {name:?}"))?;
-        let path = folder.join(name);
-        std::fs::write(&path, bytes)
-            .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
-        #[cfg(windows)]
-        crate::fs::mark::as_downloaded(&path);
-        paths.push(path);
-    }
-    prune(base);
-    Ok(paths)
+    Ok(folder)
 }
 
 /// Removes every file received from another PC (`[clipboard] share =

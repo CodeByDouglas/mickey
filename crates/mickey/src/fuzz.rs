@@ -154,6 +154,19 @@ fn clipboard() {
             ("a.txt".into(), b"hello".to_vec()),
             ("b".into(), vec![]),
         ]),
+        Wire::AskOffer,
+        Wire::Offer(crate::transfer::trigger::FileOffer {
+            ip: Some("192.0.2.7".parse().unwrap()),
+            port: 4242,
+            key: [3; 32],
+            offer: crate::transfer::offer::Offer {
+                id: 7,
+                entries: vec![crate::transfer::offer::Entry {
+                    path: "fotos/a.jpg".into(),
+                    kind: crate::transfer::offer::Kind::File { size: 9 },
+                }],
+            },
+        }),
     ];
     let seeds: Vec<Vec<u8>> = wires
         .iter()

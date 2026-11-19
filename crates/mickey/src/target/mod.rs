@@ -26,6 +26,7 @@ pub fn target(
     target_news: std::sync::mpsc::Sender<source::TargetNews>,
     found: Option<discovery::Table>,
     keeper: Option<clipboard::Keeper>,
+    transfers: Option<std::sync::Arc<crate::transfer::trigger::Transfers>>,
 ) -> Result<(), String> {
     use std::io::ErrorKind;
     use std::net::TcpListener;
@@ -48,7 +49,7 @@ pub fn target(
             listen,
             &identity,
             &trusted,
-            keeper,
+            data::Clip { keeper, transfers },
             &target_news,
             &sources,
             &grants,
