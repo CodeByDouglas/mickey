@@ -72,7 +72,17 @@ impl Clipboard {
     pub fn write(&mut self, content: &Content) -> Result<(), String> {
         let done = match content {
             Content::Text(text) => self.0.set_text(text.as_str()),
-            Content::Files(paths) => self.0.set().file_list(paths),
+            Content::Files(paths) => {
+                // On Windows arboard (3.7) sets a file list without emptying
+                // the clipboard first, as it does for text and images: over
+                // files the Explorer copied, the write is then ignored, with
+                // no error, and the Explorer's files stay. Emptied first.
+                #[cfg(windows)]
+                if let Err(err) = self.0.clear() {
+                    return Err(format!("cannot write the clipboard: {err}"));
+                }
+                self.0.set().file_list(paths)
+            }
             Content::Image {
                 width,
                 height,
