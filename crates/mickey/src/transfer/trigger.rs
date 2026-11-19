@@ -17,11 +17,11 @@ use crate::transfer::offers::Offers;
 use crate::transfer::receive::{self, Fetched};
 use crate::transfer::wire::{self, Message};
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Above this, a transfer is asked about first (Bring / Ignore); until
-/// that window exists (#478's next PR), it is not fetched at all.
+/// Above this, a transfer is asked about first: Bring (to
+/// `Downloads/Mickey`) or Ignore.
 pub const ASK_OVER: u64 = 1 << 30;
 
 /// An offer as the clipboard carries it.
@@ -125,7 +125,7 @@ pub struct Transfers {
     pub received: PathBuf,
     /// Files are fetched only from a paired PC.
     pub trusted: trust::Shared,
-    /// Each folder transfers brought here, and the PC its files came from:
+    /// Each file or folder transfers brought here, and the PC it came from:
     /// they are never sent back there (#424). As long as Mickey runs.
     pub came_from: std::sync::Mutex<Vec<(PathBuf, [u8; 32])>>,
 }
@@ -182,37 +182,56 @@ impl Transfers {
         if offer.origin == Some(*self.identity.public()) {
             return;
         }
-        let size = total(&offer.offer);
-        if size > ASK_OVER {
-            println!(
-                "mickey: files of {:.1} GB offered; over {} GB they will be asked about first, not yet built (#478)",
-                size as f64 / 1e9,
-                ASK_OVER >> 30
-            );
-            return;
-        }
         let this = Arc::clone(self);
         crate::threads::spawn("transfer fetch", move || {
+            let into = match this.landing(&offer, from) {
+                Ok(Some(into)) => into,
+                Ok(None) => return,
+                Err(err) => return eprintln!("mickey: files not fetched: {err}"),
+            };
             let before = keeper.read();
-            match this.fetch_now(&offer, from) {
+            match this.fetch_now(&offer, from, &into) {
                 // Everything skipped by the other PC: nothing to paste.
                 Ok(landed) if landed.is_empty() => {}
                 Ok(landed) if keeper.read() == before => keeper.write(Content::Files(landed)),
-                Ok(landed) => println!(
+                Ok(_) => println!(
                     "mickey: files arrived in {}, not pasted: something else was copied meanwhile",
-                    landed
-                        .first()
-                        .and_then(|path| path.parent())
-                        .map_or_else(String::new, |folder| folder.display().to_string())
+                    into.display()
                 ),
                 Err(err) => eprintln!("mickey: files not fetched: {err}"),
             }
         });
     }
 
-    /// Fetches `offer` into a fresh folder for received files; where its
-    /// top-level files and folders landed.
-    fn fetch_now(&self, offer: &FileOffer, from: IpAddr) -> Result<Vec<PathBuf>, String> {
+    /// Where `offer`'s files go: a fresh folder among the received ones; or,
+    /// over `ASK_OVER`, `Downloads/Mickey` if the owner says Bring, and
+    /// `None` if they say Ignore.
+    fn landing(&self, offer: &FileOffer, from: IpAddr) -> Result<Option<PathBuf>, String> {
+        let size = total(&offer.offer);
+        if size <= ASK_OVER {
+            return crate::clipboard::received::new_folder(&self.received).map(Some);
+        }
+        if !ask_to_bring(offer, from, size) {
+            println!(
+                "mickey: {:.1} GB of files offered, not brought",
+                size as f64 / 1e9
+            );
+            return Ok(None);
+        }
+        let folder = crate::fs::downloads::mickey_folder()?;
+        // Only Mickey's own leftovers go, never what the owner brought.
+        crate::transfer::cleanup::remove_abandoned(&folder, std::time::SystemTime::now());
+        Ok(Some(folder))
+    }
+
+    /// Fetches `offer` into the folder `into`; where its top-level files
+    /// and folders landed.
+    fn fetch_now(
+        &self,
+        offer: &FileOffer,
+        from: IpAddr,
+        into: &Path,
+    ) -> Result<Vec<PathBuf>, String> {
         if !self.trusted.lock_anyway().is_trusted(&offer.key) {
             return Err("files offered by a PC that is not paired".into());
         }
@@ -228,12 +247,13 @@ impl Transfers {
         if *link.peer_key() != offer.key {
             return Err(format!("{} answered with another PC's key", at.ip()));
         }
-        let into = crate::clipboard::received::new_folder(&self.received)?;
-        self.came_from.lock_anyway().push((into.clone(), offer.key));
         let mut fetched = Fetched::default();
-        receive::fetch(&mut link, &offer.offer, &into, &mut fetched)
+        receive::fetch(&mut link, &offer.offer, into, &mut fetched)
             .map_err(|err| err.to_string())?;
         let summary = &fetched.summary;
+        // Never sent back there (#424).
+        let landed = summary.landed.iter().map(|path| (path.clone(), offer.key));
+        self.came_from.lock_anyway().extend(landed);
         println!(
             "mickey: {} files, {:.1} MB, verified, in {}",
             summary.files,
@@ -242,6 +262,54 @@ impl Transfers {
         );
         Ok(summary.landed.clone())
     }
+}
+
+/// Asks the owner whether to bring `size` bytes of files offered by the
+/// PC at `from`: Bring or Ignore, with what they are (`mickey-ui bring`).
+fn ask_to_bring(offer: &FileOffer, from: IpAddr, size: u64) -> bool {
+    let who = crate::target::data::peer_name(offer.ip.unwrap_or(from));
+    let size = format!("{:.1} GB", size as f64 / 1e9);
+    let answer = crate::window::ui_command(&["bring", &who, &size, &top_level(&offer.offer)])
+        .and_then(|mut ui| ui.status());
+    matches!(answer.map(|status| status.code()), Ok(Some(0)))
+}
+
+/// What `offer` holds, one line per copied file or folder (a folder with
+/// how many files it holds), the first few only.
+fn top_level(offer: &Offer) -> String {
+    const SHOWN: usize = 4;
+    let tops: Vec<&str> = offer
+        .entries
+        .iter()
+        .filter(|entry| !entry.path.contains('/'))
+        .map(|entry| entry.path.as_str())
+        .collect();
+    let mut lines: Vec<String> = tops
+        .iter()
+        .take(SHOWN)
+        .map(|top| {
+            let inside = offer
+                .entries
+                .iter()
+                .filter(|entry| {
+                    matches!(entry.kind, Kind::File { .. })
+                        && entry
+                            .path
+                            .strip_prefix(top)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                })
+                .count();
+            if inside > 0 {
+                format!("{top}/  ({inside})")
+            } else {
+                top.to_string()
+            }
+        })
+        .collect();
+    if tops.len() > SHOWN {
+        lines.push(format!("+{}", tops.len() - SHOWN));
+    }
+    lines.join("\n")
 }
 
 /// The bytes of every file in `offer`.
@@ -300,6 +368,25 @@ mod tests {
         let mut bad = bytes.clone();
         bad[2] = 5;
         assert!(FileOffer::decode(&bad).is_err());
+    }
+
+    #[test]
+    fn the_bring_question_lists_the_copied_things_first_few_only() {
+        let entry = |path: &str, kind| crate::transfer::offer::Entry {
+            path: path.into(),
+            kind,
+        };
+        let file = Kind::File { size: 1 };
+        let mut entries = vec![
+            entry("fotos", Kind::Folder),
+            entry("fotos/a.jpg", file),
+            entry("fotos/2026", Kind::Folder),
+            entry("fotos/2026/b.jpg", file),
+            entry("fotos-velhas.zip", file),
+        ];
+        entries.extend((0..5).map(|n| entry(&format!("{n}.txt"), file)));
+        let text = top_level(&Offer { id: 1, entries });
+        assert_eq!(text, "fotos/  (2)\nfotos-velhas.zip\n0.txt\n1.txt\n+3");
     }
 
     #[test]
@@ -366,7 +453,11 @@ mod tests {
         };
         // Refused before any connection: nothing listens at that address.
         let err = b
-            .fetch_now(&file_offer(None), "127.0.0.1".parse().unwrap())
+            .fetch_now(
+                &file_offer(None),
+                "127.0.0.1".parse().unwrap(),
+                &scratch.0.join("received"),
+            )
             .unwrap_err();
         assert!(err.contains("not paired"), "{err}");
         assert!(!scratch.0.join("received").exists());

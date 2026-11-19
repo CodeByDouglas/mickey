@@ -2,6 +2,7 @@
 //! (PRD 0015) share to check names, open without following links, and mark
 //! what arrived.
 
+pub mod downloads;
 #[cfg(windows)]
 pub mod mark;
 pub mod names;

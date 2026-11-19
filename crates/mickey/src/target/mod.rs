@@ -1,6 +1,6 @@
 //! The target: this PC driven by a source's keyboard and mouse.
 
-mod data;
+pub(crate) mod data;
 pub(crate) mod slots;
 
 use data::serve_clipboard;

@@ -16,6 +16,10 @@ pub struct Interface {
     /// as the layout places them. Empty: all as the layout places them.
     #[serde(default)]
     pub switcher_order: Vec<String>,
+    /// Where the question about bringing big files appears (PRD 0015): a
+    /// corner or `center`, as the switcher's.
+    #[serde(default = "default_bring_position")]
+    pub bring_position: String,
     /// The language of Mickey's windows and tray menu: `auto` (the
     /// system's), or a code from `i18n::Lang::ALL` such as `en`, `pt-BR`, `pt-PT`.
     #[serde(default = "default_language")]
@@ -28,6 +32,7 @@ impl Default for Interface {
             switcher_position: default_switcher_position(),
             switcher_vertical: false,
             switcher_order: Vec::new(),
+            bring_position: default_bring_position(),
             language: default_language(),
         }
     }
@@ -74,6 +79,11 @@ pub const SWITCHER_POSITIONS: [&str; 5] = [
     "bottom-left",
     "bottom-right",
 ];
+
+/// A notice about files arriving, out of the way.
+fn default_bring_position() -> String {
+    "bottom-right".into()
+}
 
 fn default_switcher_position() -> String {
     "bottom-right".into()

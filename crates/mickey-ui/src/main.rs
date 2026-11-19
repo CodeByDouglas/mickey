@@ -1,7 +1,7 @@
 //! Mickey's windows: the switcher (one card per PC, pick where the
 //! keyboard and mouse go; see `choice.rs` for how it is started), the
 //! settings (`settings`), the clipboard history (`history`) and the
-//! pairing question (`pair`).
+//! questions (`pair`: pairing, and whether to bring big files).
 
 // No console window next to the GUI on Windows.
 #![windows_subsystem = "windows"]
@@ -48,22 +48,8 @@ struct Switcher {
 impl eframe::App for Switcher {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        if self.needs_placing {
-            let (screen, window) = ctx.input(|input| {
-                let viewport = input.viewport();
-                (
-                    viewport.monitor_size,
-                    viewport.outer_rect.map(|rect| rect.size()),
-                )
-            });
-            if let (Some(screen), Some(window)) = (screen, window) {
-                let [x, y] = self
-                    .choice
-                    .corner
-                    .position([screen.x, screen.y], [window.x, window.y]);
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
-                self.needs_placing = false;
-            }
+        if self.needs_placing && place::move_to(&ctx, self.choice.corner) {
+            self.needs_placing = false;
         }
         const DIGITS: [egui::Key; 10] = [
             egui::Key::Num0,
@@ -268,6 +254,12 @@ fn main() -> ExitCode {
     {
         let changes = changes.clone();
         return pair::window(who, pair::Ask::Hotkeys { changes });
+    }
+    if let [command, who, size, what] = args.as_slice()
+        && command == "bring"
+    {
+        let (size, what) = (size.clone(), what.clone());
+        return pair::window(who, pair::Ask::Bring { size, what });
     }
     // `switcher --mirror …`: the copy for the PCs not in use.
     let mirror = args.iter().any(|arg| arg == "--mirror");
