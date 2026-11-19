@@ -72,6 +72,18 @@ pub enum Why {
 }
 
 impl Listing {
+    /// The file at `index` of the offer: where it is here, its size and
+    /// when it was last changed, as listed. `None` for a folder or an index
+    /// past the end.
+    pub fn file(&self, index: u32) -> Option<(&Path, u64, Option<SystemTime>)> {
+        let index = usize::try_from(index).ok()?;
+        let Kind::File { size } = self.entries.get(index)?.kind else {
+            return None;
+        };
+        let (path, modified) = &self.local[index];
+        Some((path, size, *modified))
+    }
+
     /// The offer for this listing.
     pub fn offer(&self) -> Offer {
         let mut hasher = DefaultHasher::new();

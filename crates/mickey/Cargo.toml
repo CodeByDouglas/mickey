@@ -34,6 +34,11 @@ sha2 = { version = "0.11", default-features = false }
 # already in the tree for TOML.
 serde_json = "1"
 
+# File transfers (PRD 0015): a hash of every file, checked on arrival.
+# BLAKE3 by its authors' reference crate: fast enough to hash at disk
+# speed while sending, where snow's BLAKE2s is internal to the handshake.
+blake3 = "1"
+
 # The tray icon on Linux (PRD 0009): the StatusNotifierItem protocol over
 # D-Bus, too large to write by hand. Without tokio: its blocking API runs on
 # the small async-io executor, on a thread of its own.
@@ -48,6 +53,10 @@ wasapi = "0.27"
 windows = { version = "0.62", features = ["Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Opening a file to send without following a link (`O_NOFOLLOW`, PRD
+# 0015), whose value differs between CPU architectures. Already in the
+# tree through many crates.
+libc = "0.2"
 # Desktops other than Hyprland (PRD 0004): the RemoteDesktop portal
 # (ashpd) and libei (reis, pure Rust). Both over async-io, already in the
 # tree through ksni, so no tokio; ashpd's zbus 5 is ksni's too.

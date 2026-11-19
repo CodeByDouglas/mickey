@@ -7,7 +7,16 @@
 //!           and for a file size: u64
 //! 1  Fetch  offer id: u64, file index: u32, from byte: u64
 //! 2  File   file index: u32, size: u64; then the file's bytes as a stream
+//! 3  Hash   file index: u32, BLAKE3 of the whole file: 32 bytes
+//! 4  Skip   file index: u32, why: u8 (0 changed, 1 gone)
+//! 5  StillHere  (no body): sent every few seconds while a side reads a
+//!           big file without sending anything, so the other does not
+//!           give up
 //! ```
+//!
+//! For each file the fetching PC sends `Fetch`; the other answers `File`,
+//! the bytes and `Hash`, or `Skip` if the file is no longer as offered (it
+//! may also send `Skip` after the bytes, if the file changed meanwhile).
 //!
 //! Everything decoded comes from the other PC: every path is checked, the
 //! counts and sizes are capped, and garbage is an error, never a panic.
@@ -19,6 +28,9 @@ use std::collections::HashSet;
 const OFFER: u8 = 0;
 const FETCH: u8 = 1;
 const FILE: u8 = 2;
+const HASH: u8 = 3;
+const SKIP: u8 = 4;
+const STILL_HERE: u8 = 5;
 const FOLDER_ENTRY: u8 = 0;
 const FILE_ENTRY: u8 = 1;
 
@@ -37,6 +49,28 @@ pub enum Message {
         index: u32,
         size: u64,
     },
+    /// The BLAKE3 hash of the whole file at `index`, after its bytes.
+    Hash {
+        index: u32,
+        hash: [u8; 32],
+    },
+    /// The file at `index` is not sent, or what was sent must be thrown
+    /// away.
+    Skip {
+        index: u32,
+        why: Why,
+    },
+    /// Nothing to say yet, but still here (`transport::TRANSFER_SILENT`).
+    StillHere,
+}
+
+/// Why a file is skipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Why {
+    /// Its size or modification time is no longer what the offer says.
+    Changed,
+    /// Deleted, moved, or no longer readable.
+    Gone,
 }
 
 pub fn encode(message: &Message) -> Vec<u8> {
@@ -69,6 +103,15 @@ pub fn encode(message: &Message) -> Vec<u8> {
         Message::File { index, size } => {
             [&[FILE][..], &index.to_be_bytes(), &size.to_be_bytes()].concat()
         }
+        Message::Hash { index, hash } => [&[HASH][..], &index.to_be_bytes(), hash].concat(),
+        Message::Skip { index, why } => {
+            let why = match why {
+                Why::Changed => 0,
+                Why::Gone => 1,
+            };
+            [&[SKIP][..], &index.to_be_bytes(), &[why]].concat()
+        }
+        Message::StillHere => vec![STILL_HERE],
     }
 }
 
@@ -85,6 +128,19 @@ pub fn decode(bytes: &[u8]) -> Result<Message, String> {
             index: body.u32()?,
             size: body.u64()?,
         },
+        HASH => Message::Hash {
+            index: body.u32()?,
+            hash: body.array()?,
+        },
+        SKIP => Message::Skip {
+            index: body.u32()?,
+            why: match body.u8()? {
+                0 => Why::Changed,
+                1 => Why::Gone,
+                why => return Err(format!("unknown reason {why} to skip a file")),
+            },
+        },
+        STILL_HERE => Message::StillHere,
         kind => return Err(format!("unknown transfer message {kind}")),
     };
     if !body.0.is_empty() {
@@ -194,6 +250,19 @@ mod tests {
                 index: 3,
                 size: u64::MAX,
             },
+            Message::Hash {
+                index: 3,
+                hash: [9; 32],
+            },
+            Message::Skip {
+                index: 4,
+                why: Why::Changed,
+            },
+            Message::Skip {
+                index: 5,
+                why: Why::Gone,
+            },
+            Message::StillHere,
         ];
         for message in messages {
             assert_eq!(decode(&encode(&message)).unwrap(), message);
