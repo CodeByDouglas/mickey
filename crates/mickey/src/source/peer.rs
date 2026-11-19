@@ -180,7 +180,12 @@ pub(super) fn open_data_link(
     let (shared, data_links) = (Arc::clone(shared), data_links.clone());
     crate::threads::spawn("open data link", move || {
         match transport::connect_data(input, &shared.identity) {
-            Ok(link) if *link.peer_key() == key => data_links.link(index, link),
+            Ok(mut link) if *link.peer_key() == key => {
+                match crate::clipboard::sync::ask_transfers(&mut link) {
+                    Ok(knows) => data_links.link(index, link, knows),
+                    Err(err) => eprintln!("mickey: no shared clipboard with {input}: {err}"),
+                }
+            }
             Ok(_) => eprintln!(
                 "mickey: the data port of {input} answered with another PC's key; no shared clipboard with it"
             ),
