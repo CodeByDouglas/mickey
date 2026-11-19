@@ -6,14 +6,20 @@
 //! the size the offer announced, and every path was checked when the
 //! offer was decoded (`wire`), and is checked again here. The disk never
 //! fills: see `room`.
+//!
+//! A transfer that breaks (the network, a PC asleep, a full disk) resumes
+//! where it stopped when fetched again with the same `Fetched` (#475):
+//! finished files are not fetched again, and a `.part` this transfer wrote
+//! continues from its last byte.
 
 use crate::net::secure::Link;
 use crate::platform::space;
-use crate::transfer::hash::HashWrite;
+use crate::transfer::hash::{self, HashWrite};
 use crate::transfer::offer::{Kind, Offer};
 use crate::transfer::path;
 use crate::transfer::room::{self, Guarded};
 use crate::transfer::wire::{self, Message, Why};
+use std::collections::HashSet;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
@@ -28,89 +34,172 @@ pub struct Summary {
     pub skipped: Vec<(String, Why)>,
 }
 
-/// Fetches every file of `offer` into the folder `into`. A copied file or
+/// One offer's transfer so far, kept between attempts so a broken one
+/// resumes instead of starting over. It lives as long as Mickey runs.
+#[derive(Debug, Default)]
+pub struct Fetched {
+    /// The name each top-level entry got here, chosen once.
+    tops: Vec<(String, PathBuf)>,
+    /// Entries done with: folders made, files arrived or skipped.
+    finished: HashSet<usize>,
+    /// Files with a `.part` this transfer wrote, to continue.
+    parts: HashSet<usize>,
+    pub summary: Summary,
+}
+
+/// Fetches every file of `offer` into the folder `into`, or what is left of
+/// it if `fetched` comes from an attempt that broke. A copied file or
 /// folder whose name is taken there gets `name (2)`, never overwriting.
-pub fn fetch(link: &mut Link, offer: &Offer, into: &Path) -> io::Result<Summary> {
-    // Nothing is written unless all of it fits, with the margin to spare.
-    let need = offer
+pub fn fetch(link: &mut Link, offer: &Offer, into: &Path, fetched: &mut Fetched) -> io::Result<()> {
+    let targets = offer
         .entries
         .iter()
-        .fold(0u64, |sum, entry| match entry.kind {
-            Kind::File { size } => sum.saturating_add(size),
-            Kind::Folder => sum,
-        });
+        .map(|entry| target(&entry.path, entry.kind, into, &mut fetched.tops))
+        .collect::<io::Result<Vec<PathBuf>>>()?;
+    // Nothing more is written unless what is left fits, with the margin.
+    let mut need = 0u64;
+    for (index, entry) in offer.entries.iter().enumerate() {
+        if let Kind::File { size } = entry.kind
+            && !fetched.finished.contains(&index)
+        {
+            need = need.saturating_add(size - kept(fetched, index, &targets[index], size));
+        }
+    }
     let missing = room::missing(need, space::of(into)?);
     if missing > 0 {
         return Err(room::full(missing));
     }
-    let mut summary = Summary::default();
-    // The name each top-level entry got here.
-    let mut tops: Vec<(String, PathBuf)> = Vec::new();
     for (index, entry) in offer.entries.iter().enumerate() {
-        let relative = path::checked(&entry.path).map_err(invalid)?;
-        let top = entry.path.split('/').next().unwrap_or_default();
-        let here = match tops.iter().find(|(name, _)| name == top) {
-            Some((_, here)) => here.clone(),
-            None => {
-                let is_file = top == entry.path && matches!(entry.kind, Kind::File { .. });
-                let here = free_name(&into.join(top), is_file);
-                tops.push((top.to_string(), here.clone()));
-                here
-            }
-        };
-        // The path below the top level, under the name the top level got
-        // (joining an empty path would add a trailing slash).
-        let below: PathBuf = relative.components().skip(1).collect();
-        let target = if below.as_os_str().is_empty() {
-            here
-        } else {
-            here.join(below)
-        };
-        match entry.kind {
-            Kind::Folder => std::fs::create_dir_all(&target)?,
-            Kind::File { size } => {
-                let index = u32::try_from(index).map_err(|_| invalid("too many files".into()))?;
-                match fetch_file(link, offer.id, index, size, &target)? {
-                    Some(why) => summary.skipped.push((entry.path.clone(), why)),
-                    None => {
-                        summary.files += 1;
-                        summary.bytes += size;
+        if fetched.finished.contains(&index) {
+            continue;
+        }
+        let target = &targets[index];
+        if let Kind::File { size } = entry.kind {
+            let wire_index = u32::try_from(index).map_err(|_| invalid("too many files".into()))?;
+            let from = kept(fetched, index, target, size);
+            match fetch_file(link, offer.id, wire_index, size, from, target) {
+                Ok(None) => {
+                    fetched.summary.files += 1;
+                    fetched.summary.bytes += size;
+                }
+                Ok(Some(why)) => fetched.summary.skipped.push((entry.path.clone(), why)),
+                Err(err) => {
+                    // Kept for next time unless it was thrown away (damaged,
+                    // or not this transfer's).
+                    let ours = !matches!(
+                        err.kind(),
+                        io::ErrorKind::InvalidData | io::ErrorKind::AlreadyExists
+                    );
+                    if ours && part_of(target).is_file() {
+                        fetched.parts.insert(index);
+                    } else {
+                        fetched.parts.remove(&index);
                     }
+                    return Err(err);
                 }
             }
+            fetched.parts.remove(&index);
+        } else {
+            std::fs::create_dir_all(target)?;
         }
+        fetched.finished.insert(index);
     }
     // Only what is there: a copied file the other PC skipped never landed.
-    summary.landed = tops
-        .into_iter()
-        .map(|(_, here)| here)
+    fetched.summary.landed = fetched
+        .tops
+        .iter()
+        .map(|(_, here)| here.clone())
         .filter(|here| here.symlink_metadata().is_ok())
         .collect();
-    Ok(summary)
+    Ok(())
 }
 
-/// Fetches one file into `target`; `Some(why)` if the other PC skipped it.
+/// Where the entry at `path` goes under `into`. The first entry of each
+/// top-level name picks a free name for it, kept in `tops`.
+fn target(
+    path: &str,
+    kind: Kind,
+    into: &Path,
+    tops: &mut Vec<(String, PathBuf)>,
+) -> io::Result<PathBuf> {
+    let relative = path::checked(path).map_err(invalid)?;
+    let top = path.split('/').next().unwrap_or_default();
+    let here = match tops.iter().find(|(name, _)| name == top) {
+        Some((_, here)) => here.clone(),
+        None => {
+            let is_file = top == path && matches!(kind, Kind::File { .. });
+            let here = free_name(&into.join(top), is_file);
+            tops.push((top.to_string(), here.clone()));
+            here
+        }
+    };
+    // The path below the top level, under the name the top level got
+    // (joining an empty path would add a trailing slash).
+    let below: PathBuf = relative.components().skip(1).collect();
+    Ok(if below.as_os_str().is_empty() {
+        here
+    } else {
+        here.join(below)
+    })
+}
+
+/// How many bytes of the file at `index` this transfer already has in its
+/// `.part`: 0 unless it wrote one, and never more than `size`.
+fn kept(fetched: &Fetched, index: usize, target: &Path, size: u64) -> u64 {
+    if !fetched.parts.contains(&index) {
+        return 0;
+    }
+    std::fs::symlink_metadata(part_of(target))
+        .ok()
+        .filter(|metadata| metadata.is_file() && metadata.len() <= size)
+        .map_or(0, |metadata| metadata.len())
+}
+
+/// Fetches one file into `target`, continuing its `.part` from byte `from`
+/// (0 for a new one); `Some(why)` if the other PC skipped it.
 fn fetch_file(
     link: &mut Link,
     offer: u64,
     index: u32,
     size: u64,
+    from: u64,
     target: &Path,
 ) -> io::Result<Option<Why>> {
     if let Some(folder) = target.parent() {
         std::fs::create_dir_all(folder)?;
     }
     let part = part_of(target);
-    send(
-        link,
-        &Message::Fetch {
-            offer,
-            index,
-            from: 0,
-        },
-    )?;
-    if let Some(why) = receive_into(link, index, size, &part)? {
-        return Ok(Some(why));
+    let mut hasher = blake3::Hasher::new();
+    let file = if from == 0 {
+        // Created new: a `.part` already there (the owner's, or a link) is
+        // not this transfer's to write over or to remove.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&part)?
+    } else {
+        // The other PC sends only the rest, but the hash covers the whole
+        // file: what is here is read again first.
+        hash::hash_start(std::fs::File::open(&part)?, from, &mut hasher, link)?;
+        let file = std::fs::OpenOptions::new().write(true).open(&part)?;
+        file.set_len(from)?;
+        file
+    };
+    send(link, &Message::Fetch { offer, index, from })?;
+    let folder = part.parent().unwrap_or(&part);
+    let result = write_verified(link, index, size - from, file, from, hasher, folder);
+    // Thrown away if it was skipped or arrived damaged; kept (to resume)
+    // if the network or the disk stopped it.
+    if matches!(result, Ok(Some(_)))
+        || result
+            .as_ref()
+            .is_err_and(|err| err.kind() == io::ErrorKind::InvalidData)
+    {
+        let _ = std::fs::remove_file(&part);
+    }
+    let why = result?;
+    if why.is_some() {
+        return Ok(why);
     }
     #[cfg(windows)]
     crate::fs::mark::as_downloaded(&part);
@@ -121,47 +210,30 @@ fn fetch_file(
         .map(|()| None)
 }
 
-/// Receives the file at `index` into `part`, a file it creates, and
-/// checks its hash. `part` is removed again unless the file arrived whole.
-fn receive_into(link: &mut Link, index: u32, size: u64, part: &Path) -> io::Result<Option<Why>> {
-    match recv(link)? {
-        Message::Skip { index: got, why } if got == index => return Ok(Some(why)),
-        Message::File {
-            index: got,
-            size: sent,
-        } if got == index && sent == size => {}
-        _ => return Err(invalid(format!("not the file {index} that was asked for"))),
-    }
-    // Created new: a `.part` already there (the owner's, or a link) is not
-    // this transfer's to write over or to remove.
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(part)?;
-    let folder = part.parent().unwrap_or(part);
-    let result = write_verified(link, index, size, file, folder);
-    if !matches!(result, Ok(None)) {
-        let _ = std::fs::remove_file(part);
-    }
-    result
-}
-
-/// Writes the file's bytes into `file` while hashing them, and while the
+/// Receives the last `rest` bytes of the file at `index` into `file` (at
+/// byte `from`) while hashing them after what `hasher` has, and while the
 /// disk holding `folder` keeps its margin, then checks the hash the other
 /// PC sends after them.
 fn write_verified(
     link: &mut Link,
     index: u32,
-    size: u64,
-    file: std::fs::File,
+    rest: u64,
+    mut file: std::fs::File,
+    from: u64,
+    mut hasher: blake3::Hasher,
     folder: &Path,
 ) -> io::Result<Option<Why>> {
-    let mut hasher = blake3::Hasher::new();
+    match recv(link)? {
+        Message::Skip { index: got, why } if got == index => return Ok(Some(why)),
+        Message::File { index: got, size } if got == index && size == rest => {}
+        _ => return Err(invalid(format!("not the file {index} that was asked for"))),
+    }
+    io::Seek::seek(&mut file, io::SeekFrom::Start(from))?;
     let mut writer = HashWrite {
         inner: Guarded::new(BufWriter::new(file), || space::of(folder)),
         hasher: &mut hasher,
     };
-    link.recv_stream(&mut writer, size)?;
+    link.recv_stream(&mut writer, rest)?;
     writer.flush()?;
     match recv(link)? {
         Message::Skip { index: got, why } if got == index => Ok(Some(why)),
@@ -213,8 +285,14 @@ fn send(link: &mut Link, message: &Message) -> io::Result<()> {
     link.send_bulk(&wire::encode(message))
 }
 
+/// The next message, past any `StillHere`.
 fn recv(link: &mut Link) -> io::Result<Message> {
-    wire::decode(&link.recv_bulk()?).map_err(invalid)
+    loop {
+        match wire::decode(&link.recv_bulk()?).map_err(invalid)? {
+            Message::StillHere => continue,
+            message => return Ok(message),
+        }
+    }
 }
 
 fn invalid(message: String) -> io::Error {
@@ -280,10 +358,11 @@ mod tests {
         let (mut fetching, mut serving) = link_pair();
         let id = offer.id;
         let server = thread::spawn(move || send::serve(&mut serving, &listing, id));
-        let summary = fetch(&mut fetching, offer, into);
+        let mut fetched = Fetched::default();
+        let result = fetch(&mut fetching, offer, into, &mut fetched);
         drop(fetching);
         server.join().unwrap().unwrap();
-        summary
+        result.map(|()| fetched.summary)
     }
 
     #[test]
@@ -405,6 +484,50 @@ mod tests {
     }
 
     #[test]
+    fn a_broken_transfer_resumes_where_it_stopped() {
+        let scratch = Scratch::new("resume");
+        let big: Vec<u8> = (0..1_000_000u32).map(|i| (i % 241) as u8).collect();
+        scratch.file("docs/first.txt", b"first");
+        scratch.file("docs/big.bin", &big);
+        let listing = offer::list(&[scratch.0.join("from/docs")]).unwrap();
+        let offer = listing.offer();
+        let mut fetched = Fetched::default();
+        // The first attempt: `big.bin` (index 1) breaks after 300 000
+        // bytes, as when the network goes.
+        let (mut fetching, mut serving) = link_pair();
+        let id = offer.id;
+        let first = big[..300_000].to_vec();
+        let breaking = thread::spawn(move || {
+            serving.recv_bulk().unwrap();
+            let file = Message::File {
+                index: 1,
+                size: 1_000_000,
+            };
+            serving.send_bulk(&wire::encode(&file)).unwrap();
+            serving.send_stream(&first[..], 300_000).unwrap();
+        });
+        // `big.bin` comes first in name order, `first.txt` after.
+        assert_eq!(offer.entries[1].path, "docs/big.bin");
+        assert!(fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).is_err());
+        breaking.join().unwrap();
+        let part = scratch.dest().join("docs/big.bin.part");
+        assert_eq!(std::fs::metadata(&part).unwrap().len(), 300_000, "kept");
+        // The second attempt asks only for the rest (starting over would
+        // fail: a new `.part` must not exist yet), and checks the whole.
+        let (mut fetching, mut serving) = link_pair();
+        let server = thread::spawn(move || send::serve(&mut serving, &listing, id).unwrap());
+        fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).unwrap();
+        drop(fetching);
+        server.join().unwrap();
+        let docs = scratch.dest().join("docs");
+        assert_eq!(std::fs::read(docs.join("big.bin")).unwrap(), big);
+        assert_eq!(std::fs::read(docs.join("first.txt")).unwrap(), b"first");
+        assert!(!part.exists());
+        assert_eq!(fetched.summary.files, 2);
+        assert_eq!(fetched.summary.landed, [docs]);
+    }
+
+    #[test]
     fn an_offer_that_does_not_fit_writes_nothing() {
         let scratch = Scratch::new("too-big");
         let (mut fetching, _serving) = link_pair();
@@ -415,7 +538,13 @@ mod tests {
                 kind: Kind::File { size: 1 << 50 },
             }],
         };
-        let err = fetch(&mut fetching, &offer, &scratch.dest()).unwrap_err();
+        let err = fetch(
+            &mut fetching,
+            &offer,
+            &scratch.dest(),
+            &mut Fetched::default(),
+        )
+        .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::StorageFull);
         assert_eq!(std::fs::read_dir(scratch.dest()).unwrap().count(), 0);
     }
@@ -439,7 +568,15 @@ mod tests {
             };
             serving.send_bulk(&wire::encode(&file)).unwrap();
         });
-        assert!(fetch(&mut fetching, &offer, &scratch.dest()).is_err());
+        assert!(
+            fetch(
+                &mut fetching,
+                &offer,
+                &scratch.dest(),
+                &mut Fetched::default()
+            )
+            .is_err()
+        );
         liar.join().unwrap();
         assert_eq!(std::fs::read_dir(scratch.dest()).unwrap().count(), 0);
     }

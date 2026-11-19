@@ -355,5 +355,13 @@ them carry `Co-authored-by`.
   (`statvfs`, `GetDiskFreeSpaceExW`). A transfer starts only if all its
   files fit with the margin to spare; while writing, the disk is looked at
   every 64 MB or every second and writing stops while the margin is still
-  free. Until resuming exists (#475) the stopped file's `.part` is
-  removed; #475 keeps it.
+  free. The stopped file's `.part` is kept, to resume.
+- **Resuming lives as long as Mickey runs** (#475): what a transfer has
+  done (the names its top-level entries got, finished files, the `.part`
+  files it wrote) is kept in memory, so a transfer resumes after the
+  network goes, a PC sleeps or the disk fills, but starts over after
+  Mickey restarts; its old `.part` files are then left for the cleaning
+  (#479). Only a `.part` this transfer wrote is ever continued: one found
+  on disk is never trusted.
+- **`StillHere`** (#475): while a side re-reads what it has of a big file
+  to hash it, it sends one every 5 s, a third of `TRANSFER_SILENT`.
