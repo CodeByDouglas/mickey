@@ -295,6 +295,14 @@ fn default_scroll_speed() -> i32 {
 }
 
 impl Config {
+    /// The name config.toml gives the PC at `ip`, if it lists one there.
+    pub fn peer_name(&self, ip: std::net::IpAddr) -> Option<&str> {
+        self.peers
+            .iter()
+            .find(|peer| peer.address.ip() == ip)
+            .map(|peer| peer.name.as_str())
+    }
+
     /// Every setting at its default: what an empty config.toml gives.
     pub fn empty() -> Config {
         parse("").expect("an empty config is valid")

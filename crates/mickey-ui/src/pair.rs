@@ -10,6 +10,10 @@
 //! `who` shared; `<changes>` is one line per hotkey that would change
 //! (#349).
 //!
+//! `mickey-ui bring <who> <size> <what>`: asks whether to bring files
+//! `who` offered, over 1 GB (PRD 0015); `<what>` is one line per copied
+//! file or folder. Enter brings, Esc ignores.
+//!
 //! Exit code 0 means yes, 1 anything else.
 
 use crate::i18n;
@@ -26,6 +30,8 @@ pub enum Ask {
     Join { by: String },
     /// Use the hotkeys a paired PC shared: what would change, one per line.
     Hotkeys { changes: String },
+    /// Bring files a PC offered: how big, and what, one per line.
+    Bring { size: String, what: String },
 }
 
 struct Pair {
@@ -56,9 +62,18 @@ impl eframe::App for Pair {
                         i18n::t("pair.use_them"),
                         i18n::t("pair.keep_mine"),
                     ),
+                    Ask::Bring { .. } => (
+                        i18n::tf("pair.bring_from", &[("name", &self.who)]),
+                        i18n::t("pair.bring"),
+                        i18n::t("pair.ignore"),
+                    ),
+                };
+                let heading = match self.ask {
+                    Ask::Bring { .. } => icon::ARROW_DOWN,
+                    _ => icon::LINK,
                 };
                 ui.label(
-                    egui::RichText::new(format!("{}  {title_key}", icon::LINK))
+                    egui::RichText::new(format!("{heading}  {title_key}"))
                         .size(16.0)
                         .strong(),
                 );
@@ -89,6 +104,31 @@ impl eframe::App for Pair {
                         });
                         ui.add_space(6.0);
                         ui.weak(i18n::t("pair.hotkeys_keep_own"));
+                    }
+                    Ask::Bring { size, what } => {
+                        theme::card(ui, |ui| {
+                            for line in what.lines() {
+                                ui.label(format!("{}  {line}", icon::FILE));
+                            }
+                        });
+                        ui.add_space(6.0);
+                        ui.label(i18n::tf("pair.bring_size", &[("size", size)]));
+                        ui.weak(i18n::tf("pair.bring_keep", &[("name", &self.who)]));
+                    }
+                }
+                // Only here: Enter must never pair, nor let a PC in.
+                if matches!(self.ask, Ask::Bring { .. }) {
+                    let (enter, escape) = ui.input(|input| {
+                        (
+                            input.key_pressed(egui::Key::Enter),
+                            input.key_pressed(egui::Key::Escape),
+                        )
+                    });
+                    if enter {
+                        self.answer.set(true);
+                    }
+                    if enter || escape {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 }
                 ui.add_space(10.0);
@@ -122,9 +162,16 @@ impl eframe::App for Pair {
 pub fn window(who: &str, ask: Ask) -> ExitCode {
     let options = eframe::NativeOptions {
         viewport: crate::theme::viewport()
-            .with_title(i18n::t("pair.window_title"))
+            .with_title(match ask {
+                Ask::Bring { .. } => i18n::t("pair.bring_window_title"),
+                _ => i18n::t("pair.window_title"),
+            })
             .with_app_id("mickey-pair")
-            .with_inner_size([400.0, 260.0])
+            // Bring lists up to five lines more than the other questions.
+            .with_inner_size(match ask {
+                Ask::Bring { .. } => [420.0, 340.0],
+                _ => [400.0, 260.0],
+            })
             .with_resizable(false)
             .with_always_on_top(),
         ..Default::default()

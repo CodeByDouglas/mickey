@@ -188,6 +188,12 @@ join_says = "{by} diz que {name} é um dos teus computadores."
 join_can_use = "{icon}  Uma vez dentro, pode usar o teclado e rato deste computador."
 hotkeys_keep_own = "Definições, separador Atalhos de teclado: mantém os deste computador."
 window_title = "Mickey: emparelhar com outro computador"
+bring_from = "Trazer ficheiros de {name}?"
+bring = "Trazer"
+ignore = "Ignorar"
+bring_size = "{size}, para Transferências/Mickey"
+bring_keep = "Não lhes mexa em {name} até chegarem."
+bring_window_title = "Mickey: trazer ficheiros"
 
 [history]
 title = "Histórico da área de transferência"

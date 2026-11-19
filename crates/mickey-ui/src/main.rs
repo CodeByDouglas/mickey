@@ -1,7 +1,7 @@
 //! Mickey's windows: the switcher (one card per PC, pick where the
 //! keyboard and mouse go; see `choice.rs` for how it is started), the
 //! settings (`settings`), the clipboard history (`history`) and the
-//! pairing question (`pair`).
+//! questions (`pair`: pairing, and whether to bring big files).
 
 // No console window next to the GUI on Windows.
 #![windows_subsystem = "windows"]
@@ -268,6 +268,12 @@ fn main() -> ExitCode {
     {
         let changes = changes.clone();
         return pair::window(who, pair::Ask::Hotkeys { changes });
+    }
+    if let [command, who, size, what] = args.as_slice()
+        && command == "bring"
+    {
+        let (size, what) = (size.clone(), what.clone());
+        return pair::window(who, pair::Ask::Bring { size, what });
     }
     // `switcher --mirror …`: the copy for the PCs not in use.
     let mirror = args.iter().any(|arg| arg == "--mirror");

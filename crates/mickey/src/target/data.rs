@@ -129,17 +129,12 @@ pub(super) fn serve_clipboard(
 
 /// The PC at `from`, named as config.toml knows it; its address if
 /// config.toml does not list it.
-fn peer_name(from: std::net::IpAddr) -> String {
+pub(crate) fn peer_name(from: std::net::IpAddr) -> String {
     config::Config::load()
         .ok()
         .flatten()
-        .and_then(|config| {
-            config
-                .peers
-                .into_iter()
-                .find(|peer| peer.address.ip() == from)
-        })
-        .map_or_else(|| from.to_string(), |peer| peer.name)
+        .and_then(|config| config.peer_name(from).map(str::to_string))
+        .unwrap_or_else(|| from.to_string())
 }
 
 /// One small message a peer sent on its data link, by `kind`: the group

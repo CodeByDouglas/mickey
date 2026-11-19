@@ -190,6 +190,12 @@ join_says = "{by} says {name} is one of your PCs."
 join_can_use = "{icon}  Once in, it can use this PC's keyboard and mouse."
 hotkeys_keep_own = "Settings, Hotkeys tab: keep this PC's own for good."
 window_title = "Mickey: pair with another PC"
+bring_from = "Bring files from {name}?"
+bring = "Bring"
+ignore = "Ignore"
+bring_size = "{size}, to Downloads/Mickey"
+bring_keep = "Leave them as they are on {name} until they arrive."
+bring_window_title = "Mickey: bring files"
 
 [history]
 title = "Clipboard history"
