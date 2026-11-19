@@ -179,7 +179,7 @@ clipboard's (`clipboard/wire.rs`); 16 and up are passed to the target's
 | 1 | `Text` | UTF-8 | Either way: the answer to `Ask`, or content put on the PC the keyboard went to |
 | 2 | `Image` | PNG, 8-bit RGBA | As `Text`. A received PNG may unpack to at most 256 MiB |
 | 3 | `Nothing` | none | T → S: nothing Mickey carries is copied |
-| 4 | `Files` | `count: u32`, then per file `name length: u16`, name, `size: u64`, bytes | As `Text`. At most 60 MiB in total; a name that could leave the folder is refused (`received.rs`) |
+| 4 | `Files` | `count: u32`, then per file `name length: u16`, name, `size: u64`, bytes | As `Text`. At most 60 MiB in total; a name that could leave the folder is refused (`fs/names.rs`) |
 | 16 | Group map | text, one PC per line | S → T, on every new data link and when the PCs online change |
 | 17 | Hotkeys | the `[hotkeys]` lines of `config.toml` | S → T, after the owner saves them |
 | 18 | Switcher | the focused card, then one card per line | S → T: show the switcher here, the owner is looking at you |
