@@ -100,6 +100,11 @@ impl Link {
         &self.peer
     }
 
+    /// The other side's address, as the connection sees it.
+    pub fn peer_ip(&self) -> io::Result<std::net::IpAddr> {
+        self.stream.peer_addr().map(|addr| addr.ip())
+    }
+
     /// The pairing code, e.g. "042 917": the same on both PCs only if no
     /// machine sits in between (PRD 0010).
     pub fn pairing_code(&self) -> String {

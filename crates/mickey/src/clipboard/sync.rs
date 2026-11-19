@@ -4,27 +4,33 @@ use crate::clipboard::wire::{self, Wire};
 use crate::clipboard::{Content, Keeper};
 use crate::net::secure::Link;
 use crate::threads::LockAnyway;
-use std::collections::HashMap;
+use crate::transfer::trigger::{FileOffer, Transfers};
+use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Instant;
 
 /// The target's side of a data link, until it closes: `Ask` is answered
-/// with what `read` finds copied here, and content sent here is handed to
-/// `write`, which puts it in this PC's clipboard, if `may_write` allows it;
-/// when it does not, its error names the sending PC for the log (#436).
-/// Messages of kind 16 and up (the group map, the shared hotkeys) are not
-/// the clipboard's: they go to `other`, with their kind; `TRANSFERS` is
-/// answered with the same (`ask_transfers`).
+/// with what `read` finds copied here (`None` unless the source may read
+/// it now, #185), and content sent here is handed to `write`, which puts it
+/// in this PC's clipboard, if `may_write` allows it; when it does not, its
+/// error names the sending PC for the log (#436). Messages of kind 16 and
+/// up (the group map, the shared hotkeys) are not the clipboard's: they go
+/// to `other`, with their kind; `TRANSFERS` is answered with the same
+/// (`ask_transfers`). With `transfers`, copied files go as an offer to a
+/// source that asks for one (`AskOffer`), and an offer sent here is fetched
+/// (PRD 0015).
 pub fn answer(
     mut link: Link,
-    may_read: impl Fn() -> bool,
     read: impl Fn() -> Option<Content>,
     may_write: impl Fn() -> Result<(), String>,
     write: impl Fn(Content),
     other: impl Fn(u8, &str),
     still_trusted: impl Fn() -> bool,
+    transfers: Option<(&Arc<Transfers>, &Keeper)>,
 ) -> io::Result<()> {
     loop {
         let bytes = link.recv_bulk()?;
@@ -45,11 +51,15 @@ pub fn answer(
         let message = wire::decode(&bytes).map_err(io::Error::other)?;
         match message {
             Wire::Ask => {
-                // Only right after the keyboard left this PC (#185).
-                let reply = if may_read() {
-                    read().map_or(Wire::Nothing, Wire::Content)
-                } else {
-                    Wire::Nothing
+                let reply = read().map_or(Wire::Nothing, Wire::Content);
+                link.send_bulk(&encode_or_nothing(&reply))?;
+            }
+            Wire::AskOffer => {
+                let reply = match (read(), transfers) {
+                    (Some(Content::Files(paths)), Some((transfers, _))) => {
+                        offer_or_files(transfers, paths).into()
+                    }
+                    (content, _) => content.map_or(Wire::Nothing, Wire::Content),
                 };
                 link.send_bulk(&encode_or_nothing(&reply))?;
             }
@@ -72,7 +82,28 @@ pub fn answer(
                     eprintln!("mickey: files from {who}, a PC not in control here, were refused")
                 }
             },
+            Wire::Offer(offer) => match (may_write(), transfers) {
+                (Ok(()), Some((transfers, keeper))) => {
+                    transfers.fetch(offer, link.peer_ip()?, keeper.clone());
+                }
+                (Ok(()), None) => eprintln!("mickey: files offered, but this PC cannot fetch them"),
+                (Err(who), _) => {
+                    eprintln!("mickey: files from {who}, a PC not in control here, were refused")
+                }
+            },
             Wire::Nothing => {}
+        }
+    }
+}
+
+/// Copied `paths` as an offer from this PC; as the files themselves (up to
+/// the clipboard's limit) if no offer can be made.
+fn offer_or_files(transfers: &Transfers, paths: Vec<PathBuf>) -> Carried {
+    match transfers.offer(&paths) {
+        Ok(offer) => Carried::Offer(offer),
+        Err(err) => {
+            eprintln!("mickey: files not offered ({err}); sent whole if small enough");
+            Carried::Content(Content::Files(paths))
         }
     }
 }
@@ -270,7 +301,9 @@ enum Job {
 }
 
 impl DataLinks {
-    pub fn start(keeper: Keeper) -> DataLinks {
+    /// With `transfers`, copied files cross as offers between PCs that know
+    /// them (PRD 0015).
+    pub fn start(keeper: Keeper, transfers: Option<Arc<Transfers>>) -> DataLinks {
         let (jobs, todo) = mpsc::channel();
         crate::threads::spawn("clip mover", move || {
             let mut links: HashMap<usize, Link> = HashMap::new();
@@ -280,10 +313,10 @@ impl DataLinks {
             let mut audio: Option<Vec<u8>> = None;
             // The peers whose Mickey knows file transfers (PRD 0015): only
             // they are ever sent an offer (#478).
-            let mut transfers: std::collections::HashSet<usize> = Default::default();
+            let mut knows: HashSet<usize> = HashSet::new();
             for job in todo {
                 match job {
-                    Job::Link(peer, mut link, knows) => {
+                    Job::Link(peer, mut link, knows_transfers) => {
                         // A peer that goes silent mid-answer (lid closed,
                         // Wi-Fi gone) must not hold this one thread, and
                         // every clipboard after it, for good: a read waits
@@ -300,10 +333,10 @@ impl DataLinks {
                             .flatten()
                             .all(|bytes| link.send_bulk(bytes).is_ok());
                         if sent {
-                            if knows {
-                                transfers.insert(peer);
+                            if knows_transfers {
+                                knows.insert(peer);
                             } else {
-                                transfers.remove(&peer);
+                                knows.remove(&peer);
                             }
                             links.insert(peer, link);
                         }
@@ -326,7 +359,13 @@ impl DataLinks {
                         links.retain(|_, link| link.send_bulk(&bytes).is_ok());
                         audio = Some(bytes);
                     }
-                    Job::Moved { from, to } => carry(&keeper, &mut links, from, to),
+                    Job::Moved { from, to } => {
+                        let offers = Offers {
+                            transfers: transfers.as_ref(),
+                            knows: &knows,
+                        };
+                        carry(&keeper, &mut links, offers, from, to);
+                    }
                 }
             }
         });
@@ -396,25 +435,79 @@ impl DataLinks {
     }
 }
 
-/// Takes what is copied on `from` and puts it on `to`. A link that fails
-/// is dropped; the next connection brings a new one.
+/// Which PCs take copied files as an offer: this one if it has
+/// `transfers`, a peer if it also said it knows them.
+#[derive(Clone, Copy)]
+struct Offers<'a> {
+    transfers: Option<&'a Arc<Transfers>>,
+    knows: &'a HashSet<usize>,
+}
+
+impl Offers<'_> {
+    fn take(&self, peer: Option<usize>) -> bool {
+        self.transfers.is_some() && peer.is_none_or(|peer| self.knows.contains(&peer))
+    }
+}
+
+/// What a crossing carries: the clipboard itself, or copied files as an
+/// offer to fetch.
+enum Carried {
+    Content(Content),
+    Offer(FileOffer),
+}
+
+impl From<Carried> for Wire {
+    fn from(carried: Carried) -> Wire {
+        match carried {
+            Carried::Content(content) => Wire::Content(content),
+            Carried::Offer(offer) => Wire::Offer(offer),
+        }
+    }
+}
+
+/// The keyboard went from `from` to `to`: what is copied at `from` is put
+/// at `to`. Files go as an offer when both ends take one.
 fn carry(
     keeper: &Keeper,
     links: &mut HashMap<usize, Link>,
+    offers: Offers,
     from: Option<usize>,
     to: Option<usize>,
 ) {
     let started = Instant::now();
-    let content = match from {
-        None => keeper.read(),
+    let both_take_offers = offers.take(from) && offers.take(to);
+    let carried = match from {
+        None => keeper
+            .read()
+            .map(|content| match (content, offers.transfers) {
+                // This PC's own files, to a peer that takes an offer.
+                (Content::Files(paths), Some(transfers)) if both_take_offers && to.is_some() => {
+                    offer_or_files(transfers, paths)
+                }
+                (content, _) => Carried::Content(content),
+            }),
         Some(peer) => {
+            let ask = if both_take_offers {
+                Wire::AskOffer
+            } else {
+                Wire::Ask
+            };
             let asked = links.get_mut(&peer).map(|link| {
-                link.send_bulk(&wire::encode(&Wire::Ask).map_err(io::Error::other)?)?;
-                wire::decode(&recv_clipboard(link)?).map_err(io::Error::other)
+                link.send_bulk(&wire::encode(&ask).map_err(io::Error::other)?)?;
+                let answer = wire::decode(&recv_clipboard(link)?).map_err(io::Error::other)?;
+                Ok::<_, io::Error>((answer, link.peer_ip()?, *link.peer_key()))
             });
             match asked {
-                Some(Ok(Wire::Content(content))) => Some(content),
-                Some(Ok(Wire::Files(files))) => save(files).map(Content::Files),
+                Some(Ok((Wire::Content(content), _, _))) => Some(Carried::Content(content)),
+                Some(Ok((Wire::Files(files), _, _))) => {
+                    save(files).map(|paths| Carried::Content(Content::Files(paths)))
+                }
+                // A peer offers only its own files, from its own address:
+                // the one its data link comes from, whatever it says.
+                Some(Ok((Wire::Offer(mut offer), ip, key))) if offer.key == key => {
+                    offer.ip = Some(ip);
+                    Some(Carried::Offer(offer))
+                }
                 Some(Ok(_)) | None => None,
                 Some(Err(_)) => {
                     links.remove(&peer);
@@ -423,17 +516,28 @@ fn carry(
             }
         }
     };
-    let Some(content) = content else {
+    let Some(carried) = carried else {
         return;
     };
-    match to {
-        None => keeper.write(content),
-        Some(peer) => {
+    match (to, carried) {
+        (None, Carried::Content(content)) => keeper.write(content),
+        (None, Carried::Offer(offer)) => {
+            if let Some(transfers) = offers.transfers
+                && let Some(ip) = offer.ip
+            {
+                transfers.fetch(offer, ip, keeper.clone());
+            }
+        }
+        (Some(peer), carried) => {
             let Some(link) = links.get_mut(&peer) else {
                 return;
             };
-            let kind = format!("{content:?}");
-            let bytes = encode_or_nothing(&Wire::Content(content));
+            let kind = match &carried {
+                Carried::Content(content) => format!("{content:?}"),
+                Carried::Offer(_) => "an offer".to_string(),
+            };
+            let wire = Wire::from(carried);
+            let bytes = encode_or_nothing(&wire);
             let sent = link.send_bulk(&bytes).map(|()| bytes.len());
             match sent {
                 // The kind and size only: the content may be secret.
@@ -520,14 +624,14 @@ mod tests {
             // The target's clipboard holds a text.
             let _ = answer(
                 link,
-                // The keyboard just left the target.
-                || true,
+                // The keyboard just left the target, which holds a text.
                 || Some(Content::Text("from the target".into())),
                 // The source's keyboard is here.
                 || Ok(()),
                 |content| target_written.lock().unwrap().push(content),
                 |_, _| {},
                 || true,
+                None,
             );
         });
         let stream = TcpStream::connect(addr).unwrap();
@@ -563,12 +667,12 @@ mod tests {
             let link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
             let _ = answer(
                 link,
-                || true,
                 || Some(Content::Text("copied".into())),
                 || Ok(()),
                 |_| {},
                 |_, _| {},
                 || true,
+                None,
             );
         });
         let stream = TcpStream::connect(addr).unwrap();
@@ -612,13 +716,13 @@ mod tests {
             let link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
             let _ = answer(
                 link,
-                || false,
                 || None,
                 // The source's keyboard is elsewhere: refused, named.
                 || Err("laptop".into()),
                 |content| target_written.lock().unwrap().push(content),
                 |_, _| {},
                 || true,
+                None,
             );
         });
         let stream = TcpStream::connect(addr).unwrap();

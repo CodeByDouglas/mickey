@@ -8,6 +8,9 @@
 //! 3  Nothing  nothing Mickey carries is copied     (no body)
 //! 4  Files    count: u32, then per file name length: u16, name (UTF-8),
 //!             size: u64, bytes
+//! 5  AskOffer as Ask, but copied files come as an offer (PRD 0015);
+//!             sent only to a PC that said it knows transfers
+//! 6  Offer    copied files as an offer: `transfer::trigger::FileOffer`
 //! ```
 //!
 //! Files cross whole, at most `MAX_FILES` bytes together; folders are left
@@ -16,6 +19,7 @@
 //! Images cross as PNG: a screenshot's raw pixels are several times larger.
 
 use crate::clipboard::Content;
+use crate::transfer::trigger::FileOffer;
 use std::io::Cursor;
 
 const ASK: u8 = 0;
@@ -23,6 +27,8 @@ const TEXT: u8 = 1;
 const IMAGE: u8 = 2;
 const NOTHING: u8 = 3;
 const FILES: u8 = 4;
+const ASK_OFFER: u8 = 5;
+const OFFER: u8 = 6;
 /// Room for the names under the data link's 64 MB.
 pub const MAX_FILES: u64 = 60 << 20;
 /// The most files one copy may carry.
@@ -38,11 +44,17 @@ pub enum Wire {
     Nothing,
     /// Files as received: names (checked safe) and bytes, not yet saved.
     Files(Vec<(String, Vec<u8>)>),
+    /// `Ask`, from a source that takes copied files as an offer.
+    AskOffer,
+    /// Copied files as an offer, to fetch from the PC that made it.
+    Offer(FileOffer),
 }
 
 pub fn encode(wire: &Wire) -> Result<Vec<u8>, String> {
     Ok(match wire {
         Wire::Ask => vec![ASK],
+        Wire::AskOffer => vec![ASK_OFFER],
+        Wire::Offer(offer) => [&[OFFER][..], &offer.encode()].concat(),
         Wire::Nothing => vec![NOTHING],
         Wire::Content(Content::Text(text)) => [&[TEXT], text.as_bytes()].concat(),
         Wire::Content(Content::Files(paths)) => {
@@ -90,6 +102,8 @@ pub fn decode(bytes: &[u8]) -> Result<Wire, String> {
     let (&kind, body) = bytes.split_first().ok_or("an empty clipboard message")?;
     match kind {
         ASK if body.is_empty() => Ok(Wire::Ask),
+        ASK_OFFER if body.is_empty() => Ok(Wire::AskOffer),
+        OFFER => FileOffer::decode(body).map(Wire::Offer),
         NOTHING if body.is_empty() => Ok(Wire::Nothing),
         TEXT => String::from_utf8(body.to_vec())
             .map(|text| Wire::Content(Content::Text(text)))
@@ -207,6 +221,7 @@ mod tests {
     #[test]
     fn every_message_round_trips() {
         round_trip(Wire::Ask);
+        round_trip(Wire::AskOffer);
         round_trip(Wire::Nothing);
         round_trip(Wire::Content(Content::Text("olá, Mickey".into())));
         round_trip(Wire::Content(Content::Text(String::new())));

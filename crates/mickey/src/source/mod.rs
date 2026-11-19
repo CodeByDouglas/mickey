@@ -233,6 +233,8 @@ pub struct Services {
     pub history: Option<history::Shared>,
     /// A newer Mickey, found by the daily check or heard from a peer.
     pub updates: Option<update::Updates>,
+    /// Copied files cross as offers (PRD 0015).
+    pub transfers: Option<std::sync::Arc<crate::transfer::trigger::Transfers>>,
 }
 
 /// Captures local input and sends it to the focused peer. Every peer gets
@@ -254,6 +256,7 @@ pub fn run(
         keeper,
         history,
         updates,
+        transfers,
     } = services;
     // Two sources would both capture the keyboard and fight over the grab.
     if control::source_running() {
@@ -302,7 +305,9 @@ pub fn run(
         );
     }
     // The clipboard follows the keyboard (PRD 0011), over data links.
-    let data_links = keeper.clone().map(DataLinks::start);
+    let data_links = keeper
+        .clone()
+        .map(|keeper| DataLinks::start(keeper, transfers));
     let loaded = config::Config::load().ok().flatten();
     // Whether the clipboard follows this keyboard (#437); off, what other
     // PCs sent before is not kept either.

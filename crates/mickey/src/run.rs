@@ -258,6 +258,7 @@ pub fn run(command: Command) -> Result<(), String> {
                     keeper: clipboard::Keeper::start().ok(),
                     history: None,
                     updates: None,
+                    transfers: None,
                 },
             )
         }
@@ -267,6 +268,7 @@ pub fn run(command: Command) -> Result<(), String> {
             std::sync::mpsc::channel().0,
             None,
             clipboard::Keeper::start().ok(),
+            None,
         ),
         Command::Run => run_from_config(),
         Command::Monitors => {
@@ -401,16 +403,34 @@ fn run_from_config() -> Result<(), String> {
     // Other PCs fetch the files copied here (PRD 0015), whether this PC
     // controls others, is controlled, or both.
     let offers = std::sync::Arc::new(crate::transfer::offers::Offers::default());
-    crate::transfer::serve::start(this_pc.listen, identity, trusted.clone(), offers);
+    crate::transfer::serve::start(
+        this_pc.listen,
+        identity.clone(),
+        trusted.clone(),
+        offers.clone(),
+    );
+    let transfers = crate::clipboard::received::base()
+        .inspect_err(|err| eprintln!("mickey: {err}; files will cross only whole"))
+        .ok()
+        .map(|received| {
+            std::sync::Arc::new(crate::transfer::trigger::Transfers {
+                offers,
+                identity,
+                port: this_pc.listen.port(),
+                received,
+                trusted: trusted.clone(),
+                came_from: Default::default(),
+            })
+        });
     // One clipboard for the whole process (PRD 0011).
     let keeper = clipboard::Keeper::start()
         .inspect_err(|err| eprintln!("mickey: {err}; the clipboard will not be shared"))
         .ok();
     let target = this_pc.controlled.then(|| {
         let (listen, found, keeper) = (this_pc.listen, found.clone(), keeper.clone());
-        let trusted = trusted.clone();
+        let (trusted, transfers) = (trusted.clone(), transfers.clone());
         crate::threads::spawn("target", move || {
-            target(listen, trusted, news_sender, found, keeper)
+            target(listen, trusted, news_sender, found, keeper, transfers)
         })
     });
     if source_wanted {
@@ -440,6 +460,7 @@ fn run_from_config() -> Result<(), String> {
                     .map(history::record),
                 keeper,
                 updates: Some(updates),
+                transfers,
             },
         );
         match (result, target) {

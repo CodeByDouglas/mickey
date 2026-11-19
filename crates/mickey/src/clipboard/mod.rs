@@ -72,7 +72,17 @@ impl Clipboard {
     pub fn write(&mut self, content: &Content) -> Result<(), String> {
         let done = match content {
             Content::Text(text) => self.0.set_text(text.as_str()),
-            Content::Files(paths) => self.0.set().file_list(paths),
+            Content::Files(paths) => {
+                // On Windows arboard (3.7) sets a file list without emptying
+                // the clipboard first, as it does for text and images: over
+                // files the Explorer copied, the write is then ignored, with
+                // no error, and the Explorer's files stay. Emptied first.
+                #[cfg(windows)]
+                if let Err(err) = self.0.clear() {
+                    return Err(format!("cannot write the clipboard: {err}"));
+                }
+                self.0.set().file_list(paths)
+            }
             Content::Image {
                 width,
                 height,
@@ -121,6 +131,32 @@ impl Keeper {
             }
         });
         Ok(Keeper(jobs))
+    }
+
+    /// A keeper of a clipboard in memory only, for tests: no system
+    /// clipboard, no display needed.
+    #[cfg(test)]
+    pub fn in_memory(start: Option<Content>) -> Keeper {
+        let (jobs, todo) = std::sync::mpsc::channel();
+        crate::threads::spawn("clipboard in memory", move || {
+            let mut held = start;
+            for job in todo {
+                match job {
+                    Job::Read(answer) => {
+                        let _ = answer.send(held.clone());
+                    }
+                    Job::ReadText(answer) => {
+                        let text = match &held {
+                            Some(Content::Text(text)) => Some(text.clone()),
+                            _ => None,
+                        };
+                        let _ = answer.send(text);
+                    }
+                    Job::Write(content) => held = Some(content),
+                }
+            }
+        });
+        Keeper(jobs)
     }
 
     /// What is copied now; `None` also if the keeper is gone.

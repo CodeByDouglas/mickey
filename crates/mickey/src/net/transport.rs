@@ -108,7 +108,6 @@ pub fn transfer_address(input: SocketAddr) -> SocketAddr {
 pub const TRANSFER_SILENT: Duration = Duration::from_secs(15);
 
 /// Opens a transfer connection to the PC whose input link is at `input`.
-#[cfg_attr(not(test), expect(dead_code, reason = "transfers fetch from #474 on"))]
 pub fn connect_transfer(input: SocketAddr, identity: &Identity) -> io::Result<Link> {
     connect_paired(transfer_address(input), identity, Bulk::Transfer)
 }
