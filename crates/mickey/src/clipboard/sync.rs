@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Instant;
@@ -287,7 +288,12 @@ fn save(files: Vec<(String, Vec<u8>)>) -> Option<Vec<std::path::PathBuf>> {
 /// went. On its own thread, so reading, compressing and sending a big
 /// image never holds up the keyboard.
 #[derive(Clone)]
-pub struct DataLinks(Sender<Job>);
+pub struct DataLinks {
+    jobs: Sender<Job>,
+    /// How many times the keyboard has moved; each `Job::Moved` carries
+    /// its number, so a crossing knows when the keyboard has moved again.
+    crossings: Arc<AtomicU64>,
+}
 
 enum Job {
     /// A data link to this peer is open; whether the peer knows file
@@ -301,10 +307,12 @@ enum Job {
     Audio(Vec<u8>),
     /// Send this to one peer (the switcher, shown there).
     SendTo(usize, Vec<u8>),
-    /// The keyboard went from `from` to `to` (`None`: this PC).
+    /// The keyboard went from `from` to `to` (`None`: this PC); the
+    /// `crossing`-th move.
     Moved {
         from: Option<usize>,
         to: Option<usize>,
+        crossing: u64,
     },
 }
 
@@ -313,6 +321,8 @@ impl DataLinks {
     /// them (PRD 0015).
     pub fn start(keeper: Keeper, transfers: Option<Arc<Transfers>>) -> DataLinks {
         let (jobs, todo) = mpsc::channel();
+        let crossings = Arc::new(AtomicU64::new(0));
+        let latest = Arc::clone(&crossings);
         crate::threads::spawn("clip mover", move || {
             let mut links: HashMap<usize, Link> = HashMap::new();
             // The latest map and listener, for links that open after they
@@ -367,31 +377,38 @@ impl DataLinks {
                         links.retain(|_, link| link.send_bulk(&bytes).is_ok());
                         audio = Some(bytes);
                     }
-                    Job::Moved { from, to } => {
+                    Job::Moved { from, to, crossing } => {
                         let takers = OfferTakers {
                             transfers: transfers.as_ref(),
                             knows: &knows,
                         };
-                        carry(&keeper, &mut links, takers, from, to);
+                        // The keyboard moved again since (a quick bounce,
+                        // or this thread was busy): this clipboard would
+                        // reach a PC the keyboard already left, which
+                        // refuses it (#436). The newer crossing carries.
+                        let current = || latest.load(Ordering::SeqCst) == crossing;
+                        if current() {
+                            carry(&keeper, &mut links, takers, (from, to), current);
+                        }
                     }
                 }
             }
         });
-        DataLinks(jobs)
+        DataLinks { jobs, crossings }
     }
 
     pub fn link(&self, peer: usize, link: Link, knows_transfers: bool) {
-        let _ = self.0.send(Job::Link(peer, link, knows_transfers));
+        let _ = self.jobs.send(Job::Link(peer, link, knows_transfers));
     }
 
     /// Shares the group map with every peer, now and as links open.
     pub fn share_map(&self, text: &str) {
-        let _ = self.0.send(Job::Map(crate::net::group::message(text)));
+        let _ = self.jobs.send(Job::Map(crate::net::group::message(text)));
     }
 
     /// Asks `peer` to show the switcher with these cards.
     pub fn show_switcher(&self, peer: usize, cards: &str) {
-        let _ = self.0.send(Job::SendTo(
+        let _ = self.jobs.send(Job::SendTo(
             peer,
             crate::net::group::tagged(crate::net::group::SWITCHER, cards),
         ));
@@ -399,7 +416,7 @@ impl DataLinks {
 
     /// Asks `peer` to show a copy of the switcher, to look at only.
     pub fn mirror_switcher(&self, peer: usize, cards: &str) {
-        let _ = self.0.send(Job::SendTo(
+        let _ = self.jobs.send(Job::SendTo(
             peer,
             crate::net::group::tagged(crate::net::group::MIRROR, cards),
         ));
@@ -407,7 +424,7 @@ impl DataLinks {
 
     /// Tells every peer to close the switcher or copy shown for this PC.
     pub fn close_switchers(&self) {
-        let _ = self.0.send(Job::Broadcast(crate::net::group::tagged(
+        let _ = self.jobs.send(Job::Broadcast(crate::net::group::tagged(
             crate::net::group::CLOSE,
             "",
         )));
@@ -415,7 +432,7 @@ impl DataLinks {
 
     /// Sends this PC's `[hotkeys]` lines to every peer.
     pub fn share_hotkeys(&self, lines: &str) {
-        let _ = self.0.send(Job::Broadcast(crate::net::group::tagged(
+        let _ = self.jobs.send(Job::Broadcast(crate::net::group::tagged(
             crate::net::group::HOTKEYS,
             lines,
         )));
@@ -423,7 +440,7 @@ impl DataLinks {
 
     /// Gives `peer`, the PC that listens, this PC's audio stream key.
     pub fn give_audio_key(&self, peer: usize, hex: &str) {
-        let _ = self.0.send(Job::SendTo(
+        let _ = self.jobs.send(Job::SendTo(
             peer,
             crate::net::group::tagged(crate::net::group::AUDIO_KEY, hex),
         ));
@@ -432,14 +449,15 @@ impl DataLinks {
     /// Tells every peer who listens (`[audio]`'s shared lines), now and as
     /// links open.
     pub fn share_audio(&self, lines: &str) {
-        let _ = self.0.send(Job::Audio(crate::net::group::tagged(
+        let _ = self.jobs.send(Job::Audio(crate::net::group::tagged(
             crate::net::group::AUDIO,
             lines,
         )));
     }
 
     pub fn moved(&self, from: Option<usize>, to: Option<usize>) {
-        let _ = self.0.send(Job::Moved { from, to });
+        let crossing = self.crossings.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = self.jobs.send(Job::Moved { from, to, crossing });
     }
 }
 
@@ -478,12 +496,15 @@ impl From<Carried> for Wire {
 
 /// The keyboard went from `from` to `to`: what is copied at `from` is put
 /// at `to`. Files go as an offer when both ends take one.
+/// Carries the clipboard from `from` to `to` (`None`: this PC). It gives
+/// up before putting it anywhere once `current` says the keyboard has
+/// moved again.
 fn carry(
     keeper: &Keeper,
     links: &mut HashMap<usize, Link>,
     takers: OfferTakers,
-    from: Option<usize>,
-    to: Option<usize>,
+    (from, to): (Option<usize>, Option<usize>),
+    current: impl Fn() -> bool,
 ) {
     let started = Instant::now();
     let both_take_offers = takers.takes(from) && takers.takes(to);
@@ -534,6 +555,9 @@ fn carry(
     let Some(carried) = carried else {
         return;
     };
+    if !current() {
+        return;
+    }
     match (to, carried) {
         (None, Carried::Content(content)) => keeper.write(content),
         (None, Carried::NotOffered(why)) => crate::transfer::show::failed("", &why),
@@ -749,5 +773,35 @@ mod tests {
         drop(link);
         target.join().unwrap();
         assert!(written.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_crossing_overtaken_by_another_sends_nothing() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let target = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            wire::decode(&link.recv_bulk().unwrap()).unwrap()
+        });
+        let stream = TcpStream::connect(addr).unwrap();
+        let link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
+        let mut links = HashMap::from([(0, link)]);
+        let keeper = Keeper::in_memory(Some(Content::Text("copied before".into())));
+        let knows = HashSet::new();
+        let takers = OfferTakers {
+            transfers: None,
+            knows: &knows,
+        };
+        // The keyboard already left peer 0: nothing goes.
+        carry(&keeper, &mut links, takers, (None, Some(0)), || false);
+        // It came back and stays, with something new copied: that goes.
+        keeper.write(Content::Text("copied here".into()));
+        carry(&keeper, &mut links, takers, (None, Some(0)), || true);
+        assert_eq!(
+            target.join().unwrap(),
+            Wire::Content(Content::Text("copied here".into())),
+            "the first message the target gets is the current crossing's"
+        );
     }
 }
