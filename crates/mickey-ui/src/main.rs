@@ -6,6 +6,7 @@
 // No console window next to the GUI on Windows.
 #![windows_subsystem = "windows"]
 
+mod bring;
 mod choice;
 mod history;
 mod i18n;
@@ -17,6 +18,7 @@ mod progress;
 mod settings;
 mod snap;
 mod theme;
+mod units;
 mod whats_new;
 
 use choice::Choice;
@@ -261,11 +263,11 @@ fn main() -> ExitCode {
     {
         return progress::window(who);
     }
-    if let [command, who, size, what] = args.as_slice()
+    if let [command, who, bytes, what] = args.as_slice()
         && command == "bring"
+        && let Ok(bytes) = bytes.parse()
     {
-        let (size, what) = (size.clone(), what.clone());
-        return pair::window(who, pair::Ask::Bring { size, what });
+        return bring::window(who, bytes, what);
     }
     // `switcher --mirror …`: the copy for the PCs not in use.
     let mirror = args.iter().any(|arg| arg == "--mirror");

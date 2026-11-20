@@ -192,12 +192,6 @@ join_says = "{by} diz que {name} é um dos seus PCs."
 join_can_use = "{icon}  Depois de entrar, ele pode usar o teclado e o mouse deste PC."
 hotkeys_keep_own = "Configurações, aba Atalhos: manter os deste PC de vez."
 window_title = "Mickey: parear com outro PC"
-bring_from = "Trazer arquivos de {name}?"
-bring = "Trazer"
-ignore = "Ignorar"
-bring_size = "{size}, para Downloads/Mickey"
-bring_keep = "Não mexa neles em {name} até chegarem."
-bring_window_title = "Mickey: trazer arquivos"
 
 [history]
 title = "Histórico da área de transferência"
@@ -280,6 +274,14 @@ window_title = "Mickey {version}: novidades"
 heading = "O que há de novo no Mickey {version}"
 close = "Fechar"
 all_releases = "Todas as versões"
+
+[bring]
+question = "Trazer arquivos de {name}?"
+bring = "Trazer"
+ignore = "Ignorar"
+size = "{size}, para Downloads/Mickey"
+keep = "Não mexa neles em {name} até chegarem."
+window_title = "Mickey: trazer arquivos"
 
 [progress]
 window_title = "Mickey: arquivos chegando"

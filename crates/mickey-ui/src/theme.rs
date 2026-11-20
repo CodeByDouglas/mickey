@@ -251,3 +251,28 @@ pub fn keycaps(ui: &mut egui::Ui, text: &str, double: bool, faded: bool) {
 pub fn primary(icon: &str, text: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(format!("{icon}  {text}")).strong()).fill(palette::BRUISE)
 }
+
+/// The two buttons of a question, centred: `yes` (the main one) and `no`.
+/// Says which was clicked, if one was.
+pub fn yes_no(ui: &mut egui::Ui, yes: &str, no: &str) -> Option<bool> {
+    let mut answer = None;
+    ui.horizontal(|ui| {
+        ui.add_space((ui.available_width() - 190.0).max(0.0) / 2.0);
+        if ui
+            .add_sized([90.0, 30.0], primary(icon::CHECK, yes))
+            .clicked()
+        {
+            answer = Some(true);
+        }
+        if ui
+            .add_sized(
+                [90.0, 28.0],
+                egui::Button::new(format!("{}  {no}", icon::X)),
+            )
+            .clicked()
+        {
+            answer = Some(false);
+        }
+    });
+    answer
+}

@@ -10,10 +10,6 @@
 //! `who` shared; `<changes>` is one line per hotkey that would change
 //! (#349).
 //!
-//! `mickey-ui bring <who> <size> <what>`: asks whether to bring files
-//! `who` offered, over 1 GB (PRD 0015); `<what>` is one line per copied
-//! file or folder. Enter brings, Esc ignores.
-//!
 //! Exit code 0 means yes, 1 anything else.
 
 use crate::i18n;
@@ -30,26 +26,16 @@ pub enum Ask {
     Join { by: String },
     /// Use the hotkeys a paired PC shared: what would change, one per line.
     Hotkeys { changes: String },
-    /// Bring files a PC offered: how big, and what, one per line.
-    Bring { size: String, what: String },
 }
 
 struct Pair {
     who: String,
     ask: Ask,
     answer: Rc<Cell<bool>>,
-    /// The corner the window still has to move itself to, where the
-    /// compositor does not place it (Windows, X11).
-    place: Option<crate::place::Corner>,
 }
 
 impl eframe::App for Pair {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        if let Some(corner) = self.place
-            && crate::place::move_to(ui.ctx(), corner)
-        {
-            self.place = None;
-        }
         egui::CentralPanel::default().show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 use crate::theme::{self, icon};
@@ -70,18 +56,9 @@ impl eframe::App for Pair {
                         i18n::t("pair.use_them"),
                         i18n::t("pair.keep_mine"),
                     ),
-                    Ask::Bring { .. } => (
-                        i18n::tf("pair.bring_from", &[("name", &self.who)]),
-                        i18n::t("pair.bring"),
-                        i18n::t("pair.ignore"),
-                    ),
-                };
-                let heading = match self.ask {
-                    Ask::Bring { .. } => icon::ARROW_DOWN,
-                    _ => icon::LINK,
                 };
                 ui.label(
-                    egui::RichText::new(format!("{heading}  {title_key}"))
+                    egui::RichText::new(format!("{}  {title_key}", icon::LINK))
                         .size(16.0)
                         .strong(),
                 );
@@ -113,83 +90,24 @@ impl eframe::App for Pair {
                         ui.add_space(6.0);
                         ui.weak(i18n::t("pair.hotkeys_keep_own"));
                     }
-                    Ask::Bring { size, what } => {
-                        theme::card(ui, |ui| {
-                            for line in what.lines() {
-                                ui.label(format!("{}  {line}", icon::FILE));
-                            }
-                        });
-                        ui.add_space(6.0);
-                        ui.label(i18n::tf("pair.bring_size", &[("size", size)]));
-                        ui.weak(i18n::tf("pair.bring_keep", &[("name", &self.who)]));
-                    }
-                }
-                // Only here: Enter must never pair, nor let a PC in.
-                if matches!(self.ask, Ask::Bring { .. }) {
-                    let (enter, escape) = ui.input(|input| {
-                        (
-                            input.key_pressed(egui::Key::Enter),
-                            input.key_pressed(egui::Key::Escape),
-                        )
-                    });
-                    if enter {
-                        self.answer.set(true);
-                    }
-                    if enter || escape {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
                 }
                 ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    // Centre the two buttons.
-                    ui.add_space((ui.available_width() - 190.0).max(0.0) / 2.0);
-                    let close =
-                        |ui: &egui::Ui| ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    if ui
-                        .add_sized([90.0, 30.0], theme::primary(icon::CHECK, yes))
-                        .clicked()
-                    {
-                        self.answer.set(true);
-                        close(ui);
-                    }
-                    if ui
-                        .add_sized(
-                            [90.0, 28.0],
-                            egui::Button::new(format!("{}  {no}", icon::X)),
-                        )
-                        .clicked()
-                    {
-                        close(ui);
-                    }
-                });
+                // Never on Enter: it must not pair, nor let a PC in.
+                if let Some(yes) = theme::yes_no(ui, yes, no) {
+                    self.answer.set(yes);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             });
         });
     }
 }
 
 pub fn window(who: &str, ask: Ask) -> ExitCode {
-    // Bring is a notice about files arriving: in the bottom-right corner,
-    // with an app id of its own for the compositor's rules. The others
-    // ask about trust, in the middle of the screen.
-    let (app_id, corner) = match &ask {
-        Ask::Bring { .. } => ("mickey-bring", Some(bring_corner())),
-        _ => ("mickey-pair", None),
-    };
-    let placed_by_compositor =
-        corner.is_some_and(|corner| crate::place::ask_compositor(corner, app_id));
-    let place = corner.filter(|_| !placed_by_compositor);
     let options = eframe::NativeOptions {
         viewport: crate::theme::viewport()
-            .with_title(match ask {
-                Ask::Bring { .. } => i18n::t("pair.bring_window_title"),
-                _ => i18n::t("pair.window_title"),
-            })
-            .with_app_id(app_id)
-            .with_inner_size(match &ask {
-                // Room for each line of what is brought (five at most).
-                Ask::Bring { what, .. } => [420.0, 200.0 + 28.0 * what.lines().count() as f32],
-                _ => [400.0, 260.0],
-            })
+            .with_title(i18n::t("pair.window_title"))
+            .with_app_id("mickey-pair")
+            .with_inner_size([400.0, 260.0])
             .with_resizable(false)
             .with_always_on_top(),
         ..Default::default()
@@ -206,7 +124,6 @@ pub fn window(who: &str, ask: Ask) -> ExitCode {
                 who,
                 ask,
                 answer: window_answer,
-                place,
             }))
         }),
     );
@@ -218,15 +135,4 @@ pub fn window(who: &str, ask: Ask) -> ExitCode {
             ExitCode::from(2)
         }
     }
-}
-
-/// Where the owner wants the Bring question and the transfer's progress
-/// (`[interface] bring_position`), the bottom-right corner by default.
-pub(crate) fn bring_corner() -> crate::place::Corner {
-    let position = mickey_config::Config::load()
-        .ok()
-        .flatten()
-        .map(|config| config.interface.bring_position)
-        .unwrap_or_default();
-    crate::place::Corner::parse(&position).unwrap_or(crate::place::Corner::BottomRight)
 }
