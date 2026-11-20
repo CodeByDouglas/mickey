@@ -1,8 +1,11 @@
-//! `mickey-ui bring <who> <bytes> <what> <held> <folder>`: asks whether to bring files
-//! `who` offered, over `[interface] bring_over_gb` (PRD 0015); `<what>` is one line per copied
-//! file or folder. `<held>` is how many bytes `<folder>`, where they go,
-//! already holds, when it is worth cleaning first; `0` when not. Bring (or
-//! Enter) exits 0; Ignore, Esc or closing, 1.
+//! `mickey-ui bring <who> <bytes> <what> <held> <folder> <items>`: asks
+//! whether to bring files `who` offered, over `[interface] bring_over_gb`
+//! (PRD 0015); `<what>` is one line per copied file or folder. When
+//! `<folder>`, where they go, is worth cleaning first, `<held>` is how
+//! many bytes it holds (`0` when not), and `<items>` its biggest things,
+//! one per line: `<name>\t<bytes>\t<days since it arrived>\t<days since
+//! it changed>\t<1 if incomplete>`. Bring (or Enter) exits 0; Ignore, Esc
+//! or closing, 1.
 //!
 //! It is a notice about files arriving, so it appears where the owner
 //! wants transfers shown (`Corner::for_transfers`), with an app id of its
@@ -24,6 +27,59 @@ pub struct Asked {
     /// What the folder already holds, when worth cleaning first.
     pub held: Option<u64>,
     pub folder: String,
+    /// Its biggest things, to say how old each is.
+    pub items: Vec<Item>,
+}
+
+/// One thing in the folder, as `mickey` measured it.
+#[derive(Debug, PartialEq)]
+pub struct Item {
+    pub name: String,
+    pub bytes: u64,
+    pub arrived_days: u64,
+    pub changed_days: u64,
+    pub incomplete: bool,
+}
+
+/// The `<items>` argument, skipping a line it does not understand.
+pub fn items(lines: &str) -> Vec<Item> {
+    lines
+        .lines()
+        .filter_map(|line| {
+            let [name, bytes, arrived, changed, incomplete] =
+                line.split('\t').collect::<Vec<_>>()[..]
+            else {
+                return None;
+            };
+            Some(Item {
+                name: name.to_string(),
+                bytes: bytes.parse().ok()?,
+                arrived_days: arrived.parse().ok()?,
+                changed_days: changed.parse().ok()?,
+                incomplete: incomplete == "1",
+            })
+        })
+        .collect()
+}
+
+/// How old `item` is, in words: "arrived 47 days ago, never changed".
+fn age(item: &Item) -> String {
+    if item.incomplete {
+        return i18n::t("bring.item_incomplete").to_string();
+    }
+    let arrived = i18n::tf(
+        "bring.item_arrived",
+        &[("days", &item.arrived_days.to_string())],
+    );
+    if item.changed_days >= item.arrived_days {
+        format!("{arrived}, {}", i18n::t("bring.item_never_changed"))
+    } else {
+        let changed = item.changed_days.to_string();
+        format!(
+            "{arrived}, {}",
+            i18n::tf("bring.item_changed", &[("days", &changed)])
+        )
+    }
 }
 
 struct Bring {
@@ -65,6 +121,10 @@ impl eframe::App for Bring {
                     ui.add_space(6.0);
                     let held = crate::units::size(held);
                     ui.label(i18n::tf("bring.worth_cleaning", &[("size", &held)]));
+                    for item in &self.asked.items {
+                        let size = crate::units::size(item.bytes);
+                        ui.weak(format!("{}  ·  {size}  ·  {}", item.name, age(item)));
+                    }
                     if ui
                         .button(format!("{}  {}", icon::FILE, i18n::t("progress.open")))
                         .clicked()
@@ -98,7 +158,11 @@ pub fn window(asked: Asked) -> ExitCode {
     let placed_by_compositor = place::ask_compositor(corner, APP_ID);
     // Room for each line of what is brought (five at most), and for the
     // cleaning hint.
-    let hint = if asked.held.is_some() { 70.0 } else { 0.0 };
+    let hint = if asked.held.is_some() {
+        70.0 + 20.0 * asked.items.len() as f32
+    } else {
+        0.0
+    };
     let height = 200.0 + 28.0 * asked.what.lines().count() as f32 + hint;
     let options = eframe::NativeOptions {
         viewport: theme::viewport()
@@ -130,5 +194,34 @@ pub fn window(asked: Asked) -> ExitCode {
             eprintln!("mickey-ui: cannot open a window: {err}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_items_mickey_measured_are_read() {
+        let read = items("fotos\t9000\t47\t47\t0\nbroken line\nx.zip\t5\t1\t0\t1");
+        assert_eq!(
+            read,
+            [
+                Item {
+                    name: "fotos".into(),
+                    bytes: 9000,
+                    arrived_days: 47,
+                    changed_days: 47,
+                    incomplete: false,
+                },
+                Item {
+                    name: "x.zip".into(),
+                    bytes: 5,
+                    arrived_days: 1,
+                    changed_days: 0,
+                    incomplete: true,
+                },
+            ]
+        );
     }
 }

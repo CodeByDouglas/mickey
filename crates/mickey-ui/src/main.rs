@@ -247,6 +247,12 @@ fn main() -> ExitCode {
     if args.first().map(String::as_str) == Some("whats-new") {
         return whats_new::window();
     }
+    if let [command, who, why] = args.as_slice()
+        && command == "not-paired"
+    {
+        let why = why.clone();
+        return pair::window(who, pair::Ask::NotPaired { why });
+    }
     if let [command, who, code] = args.as_slice()
         && command == "pair"
     {
@@ -268,7 +274,7 @@ fn main() -> ExitCode {
     {
         return progress::window(who);
     }
-    if let [command, who, bytes, what, held, folder] = args.as_slice()
+    if let [command, who, bytes, what, held, folder, items] = args.as_slice()
         && command == "bring"
         && let (Ok(bytes), Ok(held)) = (bytes.parse(), held.parse::<u64>())
     {
@@ -278,6 +284,7 @@ fn main() -> ExitCode {
             what: what.clone(),
             held: (held > 0).then_some(held),
             folder: folder.clone(),
+            items: bring::items(items),
         });
     }
     // `switcher --mirror …`: the copy for the PCs not in use.

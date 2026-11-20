@@ -8,6 +8,7 @@
 //! ```
 
 use crate::net::identity::fingerprint;
+use crate::net::protocol::NotPairedWhy;
 use crate::threads::LockAnyway;
 use std::fs;
 use std::io::Write;
@@ -202,10 +203,22 @@ impl TrustedPeers {
     }
 }
 
+/// What became of a pairing question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    /// The person at this PC paired.
+    Paired,
+    /// Not paired here, and why: sent to the other PC (`NotPaired`).
+    NotPaired(NotPairedWhy),
+    /// The other PC ended it first (`stopped` said so): the window closed.
+    Stopped,
+}
+
 /// Whether to talk to the peer whose key is `peer_key`. A trusted key is
 /// accepted at once; an unknown one only after the person at this machine
 /// sees the same pairing `code` on both PCs and pairs, in a window or else
-/// on the terminal. Anything else refuses. `who` names the other PC.
+/// on the terminal. `who` names the other PC. While the window is up,
+/// `stopped` is asked whether the other PC ended it (#420).
 ///
 /// It does not remember a newly paired peer: the other PC may still refuse
 /// (its pairing closed, or its owner said no), so the caller does, with
@@ -216,13 +229,14 @@ pub fn trust_or_ask(
     address: SocketAddr,
     code: &str,
     who: &str,
-) -> Result<bool, String> {
+    stopped: &dyn Fn() -> bool,
+) -> Result<Answer, String> {
     let lock = || trusted.lock_anyway();
     if lock().is_trusted(peer_key) {
-        return Ok(true);
+        return Ok(Answer::Paired);
     }
     // The list is not held while the person decides.
-    ask_once(peer_key, address, code, who)
+    ask_once(peer_key, address, code, who, stopped)
 }
 
 /// Adds a peer both sides agreed to pair with: from now on it connects
@@ -303,27 +317,28 @@ pub fn ask_once(
     address: SocketAddr,
     code: &str,
     who: &str,
-) -> Result<bool, String> {
+    stopped: &dyn Fn() -> bool,
+) -> Result<Answer, String> {
     use std::sync::atomic::Ordering;
     let ip = address.ip();
     {
         let mut refused = REFUSED.lock_anyway();
         if refused_recently(&mut refused, ip, std::time::Instant::now()) {
-            return Ok(false);
+            return Ok(Answer::NotPaired(NotPairedWhy::Busy));
         }
     }
     if ASKING.swap(true, Ordering::SeqCst) {
         println!("mickey: {address} asked to pair while another PC was asking; refused");
-        return Ok(false);
+        return Ok(Answer::NotPaired(NotPairedWhy::Busy));
     }
     let shown = if who == ip.to_string() {
         who.to_string()
     } else {
         format!("{who} ({ip})")
     };
-    let answer = ask(peer_key, address, code, &shown);
+    let answer = ask(peer_key, address, code, &shown, stopped);
     ASKING.store(false, Ordering::SeqCst);
-    if answer != Ok(true) {
+    if answer != Ok(Answer::Paired) {
         REFUSED.lock_anyway().push((ip, std::time::Instant::now()));
     }
     answer
@@ -331,24 +346,44 @@ pub fn ask_once(
 
 /// Asks the person at this PC whether to pair with the PC whose key is
 /// `peer_key`: in a window, or on the terminal when there is no window.
-fn ask(peer_key: &[u8; 32], address: SocketAddr, code: &str, who: &str) -> Result<bool, String> {
+fn ask(
+    peer_key: &[u8; 32],
+    address: SocketAddr,
+    code: &str,
+    who: &str,
+    stopped: &dyn Fn() -> bool,
+) -> Result<Answer, String> {
     println!("mickey: new PC at {address} ({})", fingerprint(peer_key));
     println!("mickey: pairing code: {code}");
-    match ask_in_window(who, code) {
+    let declined = Answer::NotPaired(NotPairedWhy::Declined);
+    match ask_in_window(who, code, stopped) {
         Some(answer) => Ok(answer),
-        None => ask_in_terminal(),
+        None => ask_in_terminal().map(|yes| if yes { Answer::Paired } else { declined }),
     }
 }
 
 /// Asks with `mickey-ui pair` (PRD 0010), installed next to this program;
 /// `None` when it cannot show a window, so the terminal is asked instead.
-fn ask_in_window(who: &str, code: &str) -> Option<bool> {
-    let status = crate::window::ui_command(&["pair", who, code])
-        .and_then(|mut ui| ui.status())
+/// Asks in a `mickey-ui pair` window, closed if `stopped` says the other
+/// PC ended it; `None` with no display to open one on.
+fn ask_in_window(who: &str, code: &str, stopped: &dyn Fn() -> bool) -> Option<Answer> {
+    let mut window = crate::window::ui_command(&["pair", who, code])
+        .and_then(|mut ui| ui.spawn())
         .ok()?;
+    let status = loop {
+        if let Ok(Some(status)) = window.try_wait() {
+            break status;
+        }
+        if stopped() {
+            let _ = window.kill();
+            let _ = window.wait();
+            return Some(Answer::Stopped);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
     match status.code() {
-        Some(0) => Some(true),
-        Some(1) => Some(false),
+        Some(0) => Some(Answer::Paired),
+        Some(1) => Some(Answer::NotPaired(NotPairedWhy::Declined)),
         // 2: no display to open a window on.
         _ => None,
     }

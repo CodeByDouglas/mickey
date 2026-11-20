@@ -10,8 +10,10 @@
 //! failed   <why>
 //! ```
 //!
-//! `skipped` lines (one per file the other PC did not send: `changed` or
-//! `gone` there) come before `done`, which lists them.
+//! `skipped` lines come before `done`, which lists them: one per file
+//! that did not come, with why. `changed` or `gone` on the other PC while
+//! it was fetched; or never offered: `link`, `name` (Windows refuses it),
+//! `case` (another name differs only in case), `not-a-file`, `unreadable`.
 //!
 //! The stage is `queued`, `space`, `rereading`, `transferring` or `paused`; speed and
 //! time left may be empty while not known. Cancel prints `cancel` and
@@ -189,6 +191,11 @@ impl eframe::App for Progress {
                                 for (why, name) in skipped {
                                     let why = match why.as_str() {
                                         "changed" => i18n::t("progress.skipped_changed"),
+                                        "link" => i18n::t("progress.skipped_link"),
+                                        "name" => i18n::t("progress.skipped_name"),
+                                        "case" => i18n::t("progress.skipped_case"),
+                                        "not-a-file" => i18n::t("progress.skipped_not_a_file"),
+                                        "unreadable" => i18n::t("progress.skipped_unreadable"),
                                         _ => i18n::t("progress.skipped_gone"),
                                     };
                                     ui.weak(format!("{name}  ({why})"));

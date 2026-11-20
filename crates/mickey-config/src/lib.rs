@@ -305,6 +305,11 @@ fn default_scroll_speed() -> i32 {
 /// The most `[interface] bring_over_gb` may be: past this, nothing would
 /// ever be asked about.
 pub const MAX_BRING_OVER_GB: u64 = 1000;
+/// The most `[interface] clean_over_gb` may be.
+pub const MAX_CLEAN_OVER_GB: u64 = 10_000;
+/// The most `[interface] clean_below_percent` may be: past half the disk,
+/// Bring would suggest cleaning almost always.
+pub const MAX_CLEAN_BELOW_PERCENT: u64 = 50;
 
 pub fn peer_name_or_address(ip: std::net::IpAddr) -> String {
     Config::load()
@@ -392,6 +397,18 @@ pub fn parse(text: &str) -> Result<Config, String> {
         return Err(format!(
             "bring_over_gb {} is more than {MAX_BRING_OVER_GB}",
             config.interface.bring_over_gb
+        ));
+    }
+    if config.interface.clean_over_gb > MAX_CLEAN_OVER_GB {
+        return Err(format!(
+            "clean_over_gb {} is more than {MAX_CLEAN_OVER_GB}",
+            config.interface.clean_over_gb
+        ));
+    }
+    if config.interface.clean_below_percent > MAX_CLEAN_BELOW_PERCENT {
+        return Err(format!(
+            "clean_below_percent {} is more than {MAX_CLEAN_BELOW_PERCENT}",
+            config.interface.clean_below_percent
         ));
     }
     if !SWITCHER_POSITIONS.contains(&config.interface.bring_position.as_str()) {
@@ -744,6 +761,7 @@ mod tests {
         assert!(parse("[interface]\nswitcher_position = \"middle\"\n").is_err());
         assert!(parse("[interface]\nbring_position = \"middle\"\n").is_err());
         assert!(parse("[interface]\nbring_over_gb = 100000\n").is_err());
+        assert!(parse("[interface]\nclean_below_percent = 80\n").is_err());
         assert!(parse("[[peer]]\nname = \"a\\tb\"\naddress = \"192.0.2.10:1\"\n").is_err());
     }
 

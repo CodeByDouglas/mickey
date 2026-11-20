@@ -93,6 +93,20 @@ recent copies.
   second (their image copies reach the history only when they cross).
 - **GNOME on Wayland** offers no clipboard protocol to other programs:
   there Mickey sees only what X11 apps copy.
+  **The Clipboard portal is the way in** (spike #497, 2026-11-19, GNOME
+  46 on Ubuntu 24.04, xdg-desktop-portal 1.18.4). It works on the
+  RemoteDesktop session Mickey already opens on GNOME.
+  - The owner approves it once: *Remember This Selection* gives a
+    `restore_token`, and the next start shows no dialog.
+  - **Writing works.** Nautilus pastes files offered as
+    `x-special/gnome-copied-files` (`copy\nfile:///…`) as well as
+    `text/uri-list`.
+  - **Noticing copies works** (`SelectionOwnerChanged`).
+  - **Reading is not confirmed yet.** The Python prototype failed passing
+    the file descriptor.
+  - Building it is #522: first a Rust spike for reading, with `ashpd`'s
+    `clipboard` feature, and for a session that asks for the clipboard
+    alone.
 - **The history is this PC's**: it includes what arrived from other PCs,
   but not copies made on another PC that never crossed. Showing the other
   PCs' histories is left for later.
