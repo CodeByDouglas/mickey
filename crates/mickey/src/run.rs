@@ -416,16 +416,13 @@ fn run_from_config() -> Result<(), String> {
         .inspect_err(|err| eprintln!("mickey: {err}; files will cross only whole"))
         .ok()
         .map(|received| {
-            std::sync::Arc::new(crate::transfer::trigger::Transfers {
+            std::sync::Arc::new(crate::transfer::trigger::Transfers::new(
                 offers,
                 identity,
-                port: this_pc.listen.port(),
+                this_pc.listen.port(),
                 received,
-                trusted: trusted.clone(),
-                came_from: Default::default(),
-                lanes: Default::default(),
-                fetches: Default::default(),
-            })
+                trusted.clone(),
+            ))
         });
     // One clipboard for the whole process (PRD 0011).
     let keeper = clipboard::Keeper::start()

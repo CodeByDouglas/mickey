@@ -10,7 +10,7 @@
 //!             size: u64, bytes
 //! 5  AskOffer as Ask, but copied files come as an offer (PRD 0015);
 //!             sent only to a PC that said it knows transfers
-//! 6  Offer    copied files as an offer: `transfer::trigger::FileOffer`
+//! 6  Offer    copied files as an offer: `transfer::file_offer::FileOffer`
 //! 7  NotOffered  copied files that cannot be offered, and why (UTF-8):
 //!             too many, or gone; sent where an offer would be
 //! ```
@@ -21,7 +21,7 @@
 //! Images cross as PNG: a screenshot's raw pixels are several times larger.
 
 use crate::clipboard::Content;
-use crate::transfer::trigger::FileOffer;
+use crate::transfer::file_offer::FileOffer;
 use std::io::Cursor;
 
 const ASK: u8 = 0;

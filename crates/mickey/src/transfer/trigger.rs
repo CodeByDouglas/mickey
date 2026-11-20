@@ -2,10 +2,8 @@
 //! crosses as an offer from the PC where the files are, and whoever ends up
 //! with the clipboard fetches them from that PC, then pastes their paths.
 //!
-//! The clipboard carries a `FileOffer`: who offers (its key), where it
-//! listens, and the offer. A PC that sends its own offer gives its port
-//! only; the receiving PC takes the address from the link it came on, as
-//! the group map does.
+//! The clipboard carries a `FileOffer` (`file_offer`); what became of each
+//! is in `fetches`, and the question before a big one in `bring`.
 
 use crate::clipboard::{Content, Keeper};
 use crate::net::identity::Identity;
@@ -13,108 +11,16 @@ use crate::net::secure::Link;
 use crate::net::transport;
 use crate::net::trust;
 use crate::threads::LockAnyway;
-use crate::transfer::offer::{self, Kind, Offer};
+use crate::transfer::bring;
+use crate::transfer::fetches::{Begin, Fetches, Lanes};
+use crate::transfer::file_offer::FileOffer;
+use crate::transfer::offer;
 use crate::transfer::offers::Offers;
 use crate::transfer::receive::{self, Fetched};
 use crate::transfer::show::{Ended, Watcher};
-use crate::transfer::wire::{self, Message};
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-/// Above this, a transfer is asked about first: Bring (to
-/// `Downloads/Mickey`) or Ignore.
-pub const ASK_OVER: u64 = 1 << 30;
-
-/// An offer as the clipboard carries it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileOffer {
-    /// Where the offering PC listens (its input port; transfers use + 2).
-    /// No IP: the PC the message came from.
-    pub ip: Option<IpAddr>,
-    pub port: u16,
-    /// The offering PC's key: the transfer link must answer with it.
-    pub key: [u8; 32],
-    /// The PC these files came from, if they arrived on the offering PC
-    /// by a transfer: that PC has them already, and never fetches them
-    /// back (#424).
-    pub origin: Option<[u8; 32]>,
-    pub offer: Offer,
-}
-
-impl FileOffer {
-    /// `port: u16`, the IP (`0`, or `4` and 4 bytes, or `6` and 16 bytes),
-    /// `key: 32 bytes`, the origin (`0`, or `1` and 32 bytes), then the
-    /// offer as `transfer::wire` encodes it.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut out = self.port.to_be_bytes().to_vec();
-        match self.ip {
-            None => out.push(0),
-            Some(IpAddr::V4(ip)) => {
-                out.push(4);
-                out.extend_from_slice(&ip.octets());
-            }
-            Some(IpAddr::V6(ip)) => {
-                out.push(6);
-                out.extend_from_slice(&ip.octets());
-            }
-        }
-        out.extend_from_slice(&self.key);
-        match self.origin {
-            None => out.push(0),
-            Some(origin) => {
-                out.push(1);
-                out.extend_from_slice(&origin);
-            }
-        }
-        out.extend_from_slice(&wire::encode(&Message::Offer(self.offer.clone())));
-        out
-    }
-
-    /// Everything here comes from another PC: an error, never a panic.
-    pub fn decode(bytes: &[u8]) -> Result<FileOffer, String> {
-        let short = || "a file offer that ends too soon".to_string();
-        let (port, rest) = bytes.split_first_chunk::<2>().ok_or_else(short)?;
-        let (&kind, rest) = rest.split_first().ok_or_else(short)?;
-        let (ip, rest) = match kind {
-            0 => (None, rest),
-            4 => {
-                let (ip, rest) = rest.split_first_chunk::<4>().ok_or_else(short)?;
-                (Some(IpAddr::from(*ip)), rest)
-            }
-            6 => {
-                let (ip, rest) = rest.split_first_chunk::<16>().ok_or_else(short)?;
-                (Some(IpAddr::from(*ip)), rest)
-            }
-            _ => return Err(format!("unknown address kind {kind} in a file offer")),
-        };
-        let (key, rest) = rest.split_first_chunk::<32>().ok_or_else(short)?;
-        let (origin, rest) = match rest.split_first().ok_or_else(short)? {
-            (0, rest) => (None, rest),
-            (1, rest) => {
-                let (origin, rest) = rest.split_first_chunk::<32>().ok_or_else(short)?;
-                (Some(*origin), rest)
-            }
-            (kind, _) => return Err(format!("unknown origin kind {kind} in a file offer")),
-        };
-        let Message::Offer(offer) = wire::decode(rest)? else {
-            return Err("a file offer without its offer".into());
-        };
-        Ok(FileOffer {
-            ip,
-            port: u16::from_be_bytes(*port),
-            key: *key,
-            origin,
-            offer,
-        })
-    }
-
-    /// Where to fetch from: its IP, or `from` (the PC the message came
-    /// on) if it has none.
-    pub fn address(&self, from: IpAddr) -> SocketAddr {
-        SocketAddr::new(self.ip.unwrap_or(from), self.port)
-    }
-}
 
 /// What a PC needs to offer the files copied on it and to fetch others'.
 pub struct Transfers {
@@ -129,110 +35,41 @@ pub struct Transfers {
     pub trusted: trust::Shared,
     /// Each file or folder transfers brought here, and the PC it came from:
     /// they are never sent back there (#424). As long as Mickey runs.
-    pub came_from: std::sync::Mutex<Vec<(PathBuf, [u8; 32])>>,
+    came_from: std::sync::Mutex<Vec<(PathBuf, [u8; 32])>>,
     /// One lane per PC files are fetched from: a transfer from a PC waits
     /// for the one before it from that PC to end, instead of both sharing
     /// the network and the disk.
-    pub lanes: Lanes,
+    lanes: Lanes,
     /// What became of each offer fetched here, while Mickey runs: one
     /// offered again (the keyboard crossed again) is fetched once, and one
     /// that broke goes on from where it stopped (#475, #502).
-    pub fetches: Fetches,
-}
-
-/// Each offer fetched here, by the offering PC's key and the offer's id.
-#[derive(Default)]
-pub struct Fetches(std::sync::Mutex<std::collections::HashMap<([u8; 32], u64), Fetch>>);
-
-/// What became of one offer.
-enum Fetch {
-    /// Being fetched now.
-    Running,
-    /// Stopped (the network, a sleeping PC, a full disk, Cancel): what it
-    /// had done, and where, to go on.
-    Broken {
-        into: PathBuf,
-        fetched: Box<Fetched>,
-    },
-    /// All there: where its top-level files and folders landed.
-    Done(Vec<PathBuf>),
-}
-
-/// What to do with an offer that arrives.
-enum Begin {
-    /// Nothing: it is being fetched.
-    Skip,
-    /// It is all here already, at these paths: pasted again, not fetched
-    /// again (copied again on the other PC, or crossing again).
-    Here(Vec<PathBuf>),
-    /// Go on with it, into the same folder.
-    Resume(PathBuf, Box<Fetched>),
-    /// Fetch it for the first time.
-    Start,
-}
-
-impl Fetches {
-    /// Says what to do with offer `key`, and marks it as being fetched
-    /// unless it is running or here already. Files deleted since they
-    /// arrived are fetched again.
-    fn begin(&self, key: ([u8; 32], u64)) -> Begin {
-        let mut fetches = self.0.lock_anyway();
-        match fetches.get(&key) {
-            Some(Fetch::Running) => return Begin::Skip,
-            Some(Fetch::Done(landed)) if landed.iter().all(|path| path.exists()) => {
-                return Begin::Here(landed.clone());
-            }
-            _ => {}
-        }
-        match fetches.insert(key, Fetch::Running) {
-            Some(Fetch::Broken { into, fetched }) => Begin::Resume(into, fetched),
-            _ => Begin::Start,
-        }
-    }
-
-    /// Records how the fetch of `key` ended: what a broken one had done.
-    fn end(&self, key: ([u8; 32], u64), ended: Result<Vec<PathBuf>, (PathBuf, Box<Fetched>)>) {
-        let fetch = match ended {
-            Ok(landed) => Fetch::Done(landed),
-            Err((into, fetched)) => Fetch::Broken { into, fetched },
-        };
-        self.0.lock_anyway().insert(key, fetch);
-    }
-
-    /// The folders of transfers that broke and wait to go on: never
-    /// cleaned away, or they would start over.
-    fn waiting(&self) -> Vec<PathBuf> {
-        self.0
-            .lock_anyway()
-            .values()
-            .filter_map(|fetch| match fetch {
-                Fetch::Broken { into, .. } => Some(into.clone()),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Forgets `key`: the owner said Ignore, or it could not start.
-    fn forget(&self, key: ([u8; 32], u64)) {
-        self.0.lock_anyway().remove(&key);
-    }
-}
-
-/// A lock per PC, made on first use (PRD 0015's queue).
-#[derive(Default)]
-pub struct Lanes(std::sync::Mutex<std::collections::HashMap<[u8; 32], Arc<std::sync::Mutex<()>>>>);
-
-impl Lanes {
-    /// The lane for the PC with `key`.
-    fn of(&self, key: &[u8; 32]) -> Arc<std::sync::Mutex<()>> {
-        Arc::clone(self.0.lock_anyway().entry(*key).or_default())
-    }
+    fetches: Fetches,
 }
 
 impl Transfers {
+    /// Offers this PC's copied files from `offers`, as `identity`, naming
+    /// `port`; fetches others' into `received`, from paired PCs only.
+    pub fn new(
+        offers: Arc<Offers>,
+        identity: Arc<Identity>,
+        port: u16,
+        received: PathBuf,
+        trusted: trust::Shared,
+    ) -> Transfers {
+        Transfers {
+            offers,
+            identity,
+            port,
+            received,
+            trusted,
+            came_from: Default::default(),
+            lanes: Default::default(),
+            fetches: Default::default(),
+        }
+    }
+
     /// An offer of the files at `paths`, handed out by this PC (the last
-    /// few stay fetchable). The IP is left out: the
-    /// receiving PC knows it.
+    /// few stay fetchable). The IP is left out: the receiving PC knows it.
     pub fn offer(&self, paths: &[PathBuf]) -> Result<FileOffer, String> {
         let listing = offer::list(paths)?;
         // Nothing left to offer (the copied files were deleted or moved):
@@ -292,9 +129,8 @@ impl Transfers {
                 Begin::Resume(into, fetched) => (into, *fetched),
                 Begin::Start => match this.landing(&offer, &who) {
                     Ok(Some(into)) => {
-                        let mut fetched = Fetched::default();
-                        fetched.mark = crate::fs::mark::Mark::configured(&who);
-                        (into, fetched)
+                        let mark = crate::fs::mark::Mark::configured(&who);
+                        (into, Fetched::marked(mark))
                     }
                     Ok(None) => return this.fetches.forget(key),
                     Err(err) => {
@@ -319,8 +155,10 @@ impl Transfers {
                     "mickey: files not fetched: {err}; offered again, they go on from where they stopped"
                 ),
             }
-            let broken = |_| (into, Box::new(fetched));
-            this.fetches.end(key, result.map_err(broken));
+            match result {
+                Ok(landed) => this.fetches.done(key, landed),
+                Err(_) => this.fetches.broke(key, into, fetched),
+            }
         });
     }
 
@@ -360,15 +198,15 @@ impl Transfers {
     }
 
     /// Where `offer`'s files go: a fresh folder among the received ones; or,
-    /// over `ASK_OVER`, `Downloads/Mickey` if the owner says Bring, and
+    /// over `bring::ASK_OVER`, `Downloads/Mickey` if the owner says Bring, and
     /// `None` if they say Ignore.
     fn landing(&self, offer: &FileOffer, who: &str) -> Result<Option<PathBuf>, String> {
-        let size = total(&offer.offer);
-        if size <= ASK_OVER {
+        let size = bring::total(&offer.offer);
+        if size <= bring::ASK_OVER {
             let waiting = self.fetches.waiting();
             return crate::clipboard::received::new_folder(&self.received, &waiting).map(Some);
         }
-        if !ask_to_bring(offer, who, size) {
+        if !bring::ask(&offer.offer, who, size) {
             println!(
                 "mickey: {:.1} GB of files offered, not brought",
                 size as f64 / 1e9
@@ -426,204 +264,33 @@ impl Transfers {
     }
 }
 
-/// Asks the owner whether to bring `size` bytes of files offered by
-/// `who`: Bring or Ignore, with what they are (`mickey-ui bring`).
-fn ask_to_bring(offer: &FileOffer, who: &str, size: u64) -> bool {
-    let size = format!("{:.1} GB", size as f64 / 1e9);
-    let answer = crate::window::ui_command(&["bring", who, &size, &top_level(&offer.offer)])
-        .and_then(|mut ui| ui.status());
-    matches!(answer.map(|status| status.code()), Ok(Some(0)))
-}
-
-/// What `offer` holds, one line per copied file or folder (a folder with
-/// how many files it holds), the first few only.
-fn top_level(offer: &Offer) -> String {
-    const SHOWN: usize = 4;
-    let tops: Vec<&str> = offer
-        .entries
-        .iter()
-        .filter(|entry| !entry.path.contains('/'))
-        .map(|entry| entry.path.as_str())
-        .collect();
-    let mut lines: Vec<String> = tops
-        .iter()
-        .take(SHOWN)
-        .map(|top| {
-            let inside = offer
-                .entries
-                .iter()
-                .filter(|entry| {
-                    matches!(entry.kind, Kind::File { .. })
-                        && entry
-                            .path
-                            .strip_prefix(top)
-                            .is_some_and(|rest| rest.starts_with('/'))
-                })
-                .count();
-            if inside > 0 {
-                format!("{top}/  ({inside})")
-            } else {
-                top.to_string()
-            }
-        })
-        .collect();
-    if tops.len() > SHOWN {
-        lines.push(format!("+{}", tops.len() - SHOWN));
-    }
-    lines.join("\n")
-}
-
-/// The bytes of every file in `offer`.
-fn total(offer: &Offer) -> u64 {
-    offer.entries.iter().fold(0, |sum, entry| match entry.kind {
-        Kind::File { size } => sum.saturating_add(size),
-        Kind::Folder => sum,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_util::{Scratch, free_input_port};
-    use crate::transfer::offer::Entry;
 
-    fn file_offer(ip: Option<IpAddr>) -> FileOffer {
-        FileOffer {
-            ip,
-            port: 4242,
-            key: [7; 32],
-            origin: None,
-            offer: Offer {
-                id: 99,
-                entries: vec![
-                    Entry {
-                        path: "fotos".into(),
-                        kind: Kind::Folder,
-                    },
-                    Entry {
-                        path: "fotos/a.jpg".into(),
-                        kind: Kind::File { size: 5 },
-                    },
-                ],
-            },
-        }
-    }
-
-    #[test]
-    fn a_file_offer_reads_back_with_or_without_an_address() {
-        for ip in [
-            None,
-            Some("192.0.2.7".parse().unwrap()),
-            Some("fe80::1".parse().unwrap()),
-        ] {
-            let sent = file_offer(ip);
-            assert_eq!(FileOffer::decode(&sent.encode()).unwrap(), sent);
-        }
-    }
-
-    #[test]
-    fn a_broken_file_offer_is_an_error() {
-        let bytes = file_offer(None).encode();
-        for cut in 0..bytes.len() {
-            assert!(FileOffer::decode(&bytes[..cut]).is_err(), "cut at {cut}");
-        }
-        let mut bad = bytes.clone();
-        bad[2] = 5;
-        assert!(FileOffer::decode(&bad).is_err());
-    }
-
-    #[test]
-    fn the_bring_question_lists_the_copied_things_first_few_only() {
-        let entry = |path: &str, kind| crate::transfer::offer::Entry {
-            path: path.into(),
-            kind,
-        };
-        let file = Kind::File { size: 1 };
-        let mut entries = vec![
-            entry("fotos", Kind::Folder),
-            entry("fotos/a.jpg", file),
-            entry("fotos/2026", Kind::Folder),
-            entry("fotos/2026/b.jpg", file),
-            entry("fotos-velhas.zip", file),
-        ];
-        entries.extend((0..5).map(|n| entry(&format!("{n}.txt"), file)));
-        let text = top_level(&Offer { id: 1, entries });
-        assert_eq!(text, "fotos/  (2)\nfotos-velhas.zip\n0.txt\n1.txt\n+3");
-    }
-
-    #[test]
-    fn an_offer_is_fetched_once_and_a_broken_one_goes_on() {
-        let fetches = Fetches::default();
-        let key = ([5; 32], 42);
-        assert!(matches!(fetches.begin(key), Begin::Start));
-        assert!(
-            matches!(fetches.begin(key), Begin::Skip),
-            "offered again while it runs"
-        );
-        let mut fetched = Fetched::default();
-        fetched.summary.files = 7;
-        fetches.end(key, Err(("/somewhere".into(), Box::new(fetched))));
-        let Begin::Resume(into, fetched) = fetches.begin(key) else {
-            panic!("a broken fetch goes on");
-        };
-        assert_eq!(
-            (into, fetched.summary.files),
-            (PathBuf::from("/somewhere"), 7)
-        );
-        // All here: pasted again, not fetched again; fetched again once
-        // the files are gone.
-        let here = std::env::temp_dir();
-        fetches.end(key, Ok(vec![here.clone()]));
-        assert!(matches!(fetches.begin(key), Begin::Here(landed) if landed == [here]));
-        fetches.end(key, Ok(vec![PathBuf::from("/no/such/file/for/mickey")]));
-        assert!(matches!(fetches.begin(key), Begin::Start), "deleted since");
-        fetches.forget(key);
-        assert!(matches!(fetches.begin(key), Begin::Start), "forgotten");
-    }
-
-    #[test]
-    fn transfers_from_one_pc_take_turns() {
-        let lanes = Lanes::default();
-        let (a, b) = (lanes.of(&[1; 32]), lanes.of(&[2; 32]));
-        let _turn = a.lock_anyway();
-        assert!(lanes.of(&[1; 32]).try_lock().is_err(), "the same PC waits");
-        assert!(b.try_lock().is_ok(), "another PC goes on");
-    }
-
-    #[test]
-    fn the_address_falls_back_to_the_sending_pc() {
-        let from: IpAddr = "192.0.2.9".parse().unwrap();
-        assert_eq!(
-            file_offer(None).address(from),
-            "192.0.2.9:4242".parse().unwrap()
-        );
-        let given = file_offer(Some("192.0.2.7".parse().unwrap()));
-        assert_eq!(given.address(from), "192.0.2.7:4242".parse().unwrap());
-    }
-
-    /// A list of trusted PCs kept in `dir`, holding `key` if given.
-    fn trusting(dir: &std::path::Path, key: Option<[u8; 32]>) -> trust::Shared {
-        std::fs::create_dir_all(dir).unwrap();
-        let mut peers = trust::TrustedPeers::load(dir).unwrap();
+    /// A PC called `name`, its files under `scratch`, offering on `port`
+    /// and trusting the PC with `key`, if given.
+    fn pc(scratch: &Scratch, name: &str, port: u16, key: Option<[u8; 32]>) -> Arc<Transfers> {
+        let dir = scratch.0.join(name);
+        std::fs::create_dir_all(dir.join("trust")).unwrap();
+        let mut peers = trust::TrustedPeers::load(&dir.join("trust")).unwrap();
         if let Some(key) = key {
             peers.add(key, "test").unwrap();
         }
-        Arc::new(std::sync::Mutex::new(peers))
+        Arc::new(Transfers::new(
+            Arc::new(Offers::default()),
+            Arc::new(Identity::generate().unwrap()),
+            port,
+            dir.join("received"),
+            Arc::new(std::sync::Mutex::new(peers)),
+        ))
     }
 
     #[test]
     fn copied_files_that_are_gone_are_not_offered() {
         let scratch = Scratch::new("gone");
-        let transfers = Transfers {
-            offers: Arc::new(Offers::default()),
-            identity: Arc::new(Identity::generate().unwrap()),
-            port: 1,
-            received: scratch.0.join("received"),
-            came_from: Default::default(),
-            lanes: Default::default(),
-            fetches: Default::default(),
-            trusted: trusting(&scratch.0.join("trust"), None),
-        };
+        let transfers = pc(&scratch, "pc", 1, None);
         // Copied, then deleted before the keyboard crossed.
         assert!(
             transfers
@@ -635,22 +302,15 @@ mod tests {
     #[test]
     fn files_offered_by_a_pc_not_paired_are_not_fetched() {
         let scratch = Scratch::new("unpaired");
-        let b = Transfers {
-            offers: Arc::new(Offers::default()),
-            identity: Arc::new(Identity::generate().unwrap()),
-            port: 1,
-            received: scratch.0.join("received"),
-            came_from: Default::default(),
-            lanes: Default::default(),
-            fetches: Default::default(),
-            trusted: trusting(&scratch.0.join("trust"), None),
-        };
+        let b = pc(&scratch, "pc", 1, None);
         // Refused before any connection: nothing listens at that address.
-        let Err(err) = b.connect(&file_offer(None), "127.0.0.1".parse().unwrap()) else {
+        let Err(err) = b.connect(
+            &crate::transfer::file_offer::example(None),
+            "127.0.0.1".parse().unwrap(),
+        ) else {
             panic!("a PC not paired must be refused");
         };
         assert!(err.contains("not paired"), "{err}");
-        assert!(!scratch.0.join("received").exists());
     }
 
     #[test]
@@ -662,16 +322,7 @@ mod tests {
         std::fs::write(from.join("y.txt"), b"y").unwrap();
         // PC A serves what it hands out.
         let listen = free_input_port();
-        let a = Arc::new(Transfers {
-            offers: Arc::new(Offers::default()),
-            identity: Arc::new(Identity::generate().unwrap()),
-            port: listen.port(),
-            received: scratch.0.join("a-received"),
-            came_from: Default::default(),
-            lanes: Default::default(),
-            fetches: Default::default(),
-            trusted: trusting(&scratch.0.join("a-trust"), None),
-        });
+        let a = pc(&scratch, "a", listen.port(), None);
         let offers = Arc::clone(&a.offers);
         crate::transfer::listen::listen(
             listen,
@@ -685,16 +336,7 @@ mod tests {
         // X is copied and crosses; then Y, before X has arrived.
         let x = a.offer(&[from.join("x.bin")]).unwrap();
         let y = a.offer(&[from.join("y.txt")]).unwrap();
-        let b = Arc::new(Transfers {
-            offers: Arc::new(Offers::default()),
-            identity: Arc::new(Identity::generate().unwrap()),
-            port: 1,
-            received: scratch.0.join("b-received"),
-            came_from: Default::default(),
-            lanes: Default::default(),
-            fetches: Default::default(),
-            trusted: trusting(&scratch.0.join("b-trust"), Some(*a.identity.public())),
-        });
+        let b = pc(&scratch, "b", 1, Some(*a.identity.public()));
         let fetch = |offer: FileOffer, name: &'static str| {
             let (b, into) = (Arc::clone(&b), scratch.0.join(name));
             std::fs::create_dir_all(&into).unwrap();
@@ -722,16 +364,7 @@ mod tests {
         std::fs::write(fotos.join("a.txt"), b"hello").unwrap();
         // PC A, where the folder is copied: it serves its offers.
         let listen = free_input_port();
-        let a = Arc::new(Transfers {
-            offers: Arc::new(Offers::default()),
-            identity: Arc::new(Identity::generate().unwrap()),
-            port: listen.port(),
-            received: scratch.0.join("a-received"),
-            came_from: Default::default(),
-            lanes: Default::default(),
-            fetches: Default::default(),
-            trusted: trusting(&scratch.0.join("a-trust"), None),
-        });
+        let a = pc(&scratch, "a", listen.port(), None);
         let offers = Arc::clone(&a.offers);
         crate::transfer::listen::listen(
             listen,
@@ -774,16 +407,7 @@ mod tests {
             (None, listen.port(), *a.identity.public())
         );
         // PC B fetches it from A, and pastes it once it is all there.
-        let b = Arc::new(Transfers {
-            offers: Arc::new(Offers::default()),
-            identity: Arc::new(Identity::generate().unwrap()),
-            port: 1,
-            received: scratch.0.join("b-received"),
-            came_from: Default::default(),
-            lanes: Default::default(),
-            fetches: Default::default(),
-            trusted: trusting(&scratch.0.join("b-trust"), Some(*a.identity.public())),
-        });
+        let b = pc(&scratch, "b", 1, Some(*a.identity.public()));
         let b_keeper = Keeper::in_memory(Some(Content::Text("copied before".into())));
         b.fetch(offer, listen.ip(), b_keeper.clone());
         let pasted = (0..100)
@@ -796,16 +420,16 @@ mod tests {
             })
             .expect("the files reach the clipboard");
         assert_eq!(pasted.len(), 1);
-        assert!(pasted[0].starts_with(scratch.0.join("b-received")));
+        assert!(pasted[0].starts_with(scratch.0.join("b/received")));
         assert_eq!(std::fs::read(pasted[0].join("a.txt")).unwrap(), b"hello");
         // Copied again on B, the folder says it came from A, and A never
         // fetches it back (#424): its clipboard keeps what it holds.
         let back = b.offer(&pasted).unwrap();
         assert_eq!(back.origin, Some(*a.identity.public()));
         let a_clipboard = Keeper::in_memory(Some(Content::Text("A's own".into())));
+        // Refused before any thread starts: nothing to wait for.
         a.fetch(back, listen.ip(), a_clipboard.clone());
-        std::thread::sleep(std::time::Duration::from_millis(300));
         assert_eq!(a_clipboard.read(), Some(Content::Text("A's own".into())));
-        assert!(!scratch.0.join("a-received").exists(), "nothing fetched");
+        assert!(!scratch.0.join("a/received").exists(), "nothing fetched");
     }
 }

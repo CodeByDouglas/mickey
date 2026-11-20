@@ -6,7 +6,10 @@
 //! index, never by a path, so it can never ask for a file that was not
 //! copied.
 
+pub mod bring;
 pub mod cleanup;
+pub mod fetches;
+pub mod file_offer;
 pub mod hash;
 pub mod listen;
 pub mod offer;
