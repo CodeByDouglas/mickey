@@ -16,8 +16,9 @@ use crate::transfer::fetches::{Begin, Fetches, Lanes};
 use crate::transfer::file_offer::FileOffer;
 use crate::transfer::offer;
 use crate::transfer::offers::Offers;
+use crate::transfer::progress::Stage;
 use crate::transfer::receive::{self, Fetched};
-use crate::transfer::show::{Ended, Watcher};
+use crate::transfer::show::{Ended, Stop, Watcher};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -178,28 +179,44 @@ impl Transfers {
         into: &Path,
         fetched: &mut Fetched,
     ) -> Result<Vec<PathBuf>, String> {
-        // Waits its turn behind another transfer from the same PC.
-        let lane = self.lanes.of(&offer.key);
-        let _turn = lane.lock_anyway();
-        let mut link = self
-            .connect(offer, from)
-            .inspect_err(|why| crate::transfer::show::failed(who, why))?;
-        let shown = link
-            .try_clone()
-            .ok()
-            .map(|stop| Watcher::start(who.to_string(), fetched.progress.clone(), stop));
-        let landed = self.receive(offer, &mut link, into, fetched);
-        if let Some(shown) = shown {
-            shown.end(match &landed {
-                Ok(_) => Ended::Done {
-                    files: fetched.summary.files,
-                    bytes: fetched.summary.bytes,
-                    folder: into.display().to_string(),
-                },
-                Err(err) => Ended::Failed(err.clone()),
-            });
-        }
+        // Shown from the start, so one waiting its turn says so.
+        let shown = Watcher::start(who.to_string(), fetched.progress.clone());
+        let landed = self.fetch_in_turn(offer, from, into, fetched, &shown.stop);
+        shown.end(match &landed {
+            Ok(_) => Ended::Done {
+                files: fetched.summary.files,
+                bytes: fetched.summary.bytes,
+                folder: into.display().to_string(),
+            },
+            Err(err) => Ended::Failed(err.clone()),
+        });
         landed
+    }
+
+    /// Waits its turn behind another transfer from the same PC, then
+    /// fetches `offer`, unless the owner cancelled meanwhile (`stop`).
+    fn fetch_in_turn(
+        &self,
+        offer: &FileOffer,
+        from: IpAddr,
+        into: &Path,
+        fetched: &mut Fetched,
+        stop: &Stop,
+    ) -> Result<Vec<PathBuf>, String> {
+        let lane = self.lanes.of(&offer.key);
+        let _turn = match lane.try_lock() {
+            Ok(turn) => turn,
+            Err(_) => {
+                fetched.progress.lock_anyway().stage = Stage::Queued;
+                lane.lock_anyway()
+            }
+        };
+        if stop.cancelled() {
+            return Err("cancelled while it waited its turn".into());
+        }
+        let mut link = self.connect(offer, from)?;
+        stop.on(&link);
+        self.receive(offer, &mut link, into, fetched)
     }
 
     /// Where `offer`'s files go: a fresh folder among the received ones; or,
@@ -444,5 +461,42 @@ mod tests {
         a.fetch(back, listen.ip());
         assert_eq!(a.keeper.read(), Some(Content::Text("A's own".into())));
         assert!(!scratch.0.join("a/received").exists(), "nothing fetched");
+    }
+
+    #[test]
+    fn a_transfer_waiting_its_turn_says_so_and_can_be_cancelled() {
+        let scratch = Scratch::new("queued");
+        let a = pc(&scratch, "a", 1, None, None);
+        let offer = crate::transfer::file_offer::example(None);
+        // Another transfer from the same PC is running.
+        let lane = a.lanes.of(&offer.key);
+        let turn = lane.lock_anyway();
+        // This one broke before, so it is not `Queued` yet.
+        let mut fetched = Fetched::default();
+        fetched.progress.lock_anyway().stage = Stage::Paused;
+        let progress = fetched.progress.clone();
+        let stop = Stop::default();
+        let waiting = {
+            let (a, stop) = (Arc::clone(&a), stop.clone());
+            std::thread::spawn(move || {
+                let into = std::path::Path::new("/nowhere");
+                a.fetch_in_turn(
+                    &offer,
+                    "127.0.0.1".parse().unwrap(),
+                    into,
+                    &mut fetched,
+                    &stop,
+                )
+            })
+        };
+        let queued = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            progress.lock_anyway().stage == Stage::Queued
+        });
+        assert!(queued, "the window says it waits its turn");
+        stop.cancel();
+        drop(turn);
+        let err = waiting.join().unwrap().unwrap_err();
+        assert!(err.contains("cancelled"), "{err}");
     }
 }

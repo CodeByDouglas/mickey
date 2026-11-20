@@ -1,7 +1,8 @@
 //! Showing a transfer while it runs (PRD 0015, #477): a window in the
 //! corner (`mickey-ui progress`) once it has taken more than a moment,
 //! told how it goes ten times a second, and told how it ended. Its Cancel
-//! closes the transfer's connection; what arrived stays, to resume.
+//! closes the transfer's connection; what arrived stays, to resume. A
+//! transfer waiting its turn behind another from the same PC shows too.
 
 use crate::net::secure::Link;
 use crate::threads::LockAnyway;
@@ -9,6 +10,7 @@ use crate::transfer::progress::{self, Progress, Stage};
 use std::io::{BufRead, Write};
 use std::process::{ChildStdin, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// A transfer shorter than this shows no window.
@@ -26,15 +28,59 @@ pub enum Ended {
     Failed(String),
 }
 
+/// What Cancel stops: the transfer's connection once it has one. Until
+/// then (it waits its turn), it remembers the owner cancelled.
+#[derive(Clone, Default)]
+pub struct Stop(Arc<Mutex<Stopping>>);
+
+#[derive(Default)]
+struct Stopping {
+    link: Option<Link>,
+    cancelled: bool,
+}
+
+impl Stop {
+    /// The transfer is on `link` now: closed at once if already cancelled.
+    pub fn on(&self, link: &Link) {
+        let mut stopping = self.0.lock_anyway();
+        if let Ok(link) = link.try_clone() {
+            if stopping.cancelled {
+                let _ = link.shutdown();
+            }
+            stopping.link = Some(link);
+        }
+    }
+
+    /// Whether the owner cancelled.
+    pub fn cancelled(&self) -> bool {
+        self.0.lock_anyway().cancelled
+    }
+
+    /// What the window's Cancel does.
+    pub fn cancel(&self) {
+        let mut stopping = self.0.lock_anyway();
+        stopping.cancelled = true;
+        if let Some(link) = &stopping.link {
+            let _ = link.shutdown();
+        }
+    }
+}
+
 /// Watches one transfer; `end` says how it ended.
-pub struct Watcher(Sender<Ended>);
+pub struct Watcher {
+    ended: Sender<Ended>,
+    pub stop: Stop,
+}
 
 impl Watcher {
-    /// Starts watching `progress`, a transfer of files from `who`; `stop`
-    /// is a handle on its connection, closed if the owner cancels.
-    pub fn start(who: String, progress: progress::Shared, stop: Link) -> Watcher {
+    /// Starts watching `progress`, a transfer of files from `who`. Its
+    /// `stop` is what the window's Cancel stops.
+    pub fn start(who: String, progress: progress::Shared) -> Watcher {
         let (ended, end) = mpsc::channel();
+        let stop = Stop::default();
+        let window_stop = stop.clone();
         crate::threads::spawn("transfer shown", move || {
+            let stop = window_stop;
             let started = Instant::now();
             let mut window: Option<ChildStdin> = None;
             loop {
@@ -42,7 +88,7 @@ impl Watcher {
                     Ok(how) => {
                         // A failure always shows, however soon it came.
                         if window.is_none() && matches!(how, Ended::Failed(_)) {
-                            window = open(&who, Some(&stop));
+                            window = open(&who, Some(stop.clone()));
                         }
                         if let Some(mut input) = window {
                             let _ = writeln!(input, "{}", ended_line(&how));
@@ -53,7 +99,7 @@ impl Watcher {
                     Err(RecvTimeoutError::Timeout) => {}
                 }
                 if window.is_none() && started.elapsed() >= QUIET_FOR {
-                    window = open(&who, Some(&stop));
+                    window = open(&who, Some(stop.clone()));
                 }
                 if let Some(input) = &mut window {
                     let line = progress_line(&progress.lock_anyway());
@@ -64,11 +110,11 @@ impl Watcher {
                 }
             }
         });
-        Watcher(ended)
+        Watcher { ended, stop }
     }
 
     pub fn end(self, how: Ended) {
-        let _ = self.0.send(how);
+        let _ = self.ended.send(how);
     }
 }
 
@@ -82,20 +128,19 @@ pub fn failed(who: &str, why: &str) {
 
 /// Opens the window, and closes `stop` when it says the owner cancelled;
 /// its input, to tell it how the transfer goes.
-fn open(who: &str, stop: Option<&Link>) -> Option<ChildStdin> {
+fn open(who: &str, stop: Option<Stop>) -> Option<ChildStdin> {
     let mut child = crate::window::ui_command(&["progress", who])
         .and_then(|mut ui| ui.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn())
         .inspect_err(|err| eprintln!("mickey: cannot show the transfer: {err}"))
         .ok()?;
     let (input, stdout) = (child.stdin.take()?, child.stdout.take()?);
-    let stop = stop.and_then(|stop| stop.try_clone().ok());
     crate::threads::spawn("transfer cancel", move || {
         let cancelled = std::io::BufReader::new(stdout)
             .lines()
             .map_while(Result::ok)
             .any(|line| line == "cancel");
         if cancelled && let Some(stop) = stop {
-            let _ = stop.shutdown();
+            stop.cancel();
         }
         let _ = child.wait();
     });
@@ -106,7 +151,8 @@ fn open(who: &str, stop: Option<&Link>) -> Option<ChildStdin> {
 /// two empty while not known.
 fn progress_line(progress: &Progress) -> String {
     let stage = match progress.stage {
-        Stage::Queued | Stage::CheckingSpace => "space",
+        Stage::Queued => "queued",
+        Stage::CheckingSpace => "space",
         Stage::Rereading => "rereading",
         Stage::Paused => "paused",
         Stage::Transferring | Stage::Done => "transferring",
@@ -161,5 +207,15 @@ mod tests {
         assert_eq!(ended_line(&done), "done\t3\t42\t/home/ana/Downloads/Mickey");
         let failed = Ended::Failed("cannot reach\n192.0.2.7".into());
         assert_eq!(ended_line(&failed), "failed\tcannot reach 192.0.2.7");
+    }
+
+    #[test]
+    fn cancelled_before_the_link_exists_closes_it_once_it_does() {
+        let (ours, mut theirs) = crate::test_util::link_pair();
+        let stop = Stop::default();
+        stop.cancel();
+        assert!(stop.cancelled());
+        stop.on(&ours);
+        assert!(theirs.recv_bulk().is_err(), "the link is closed");
     }
 }

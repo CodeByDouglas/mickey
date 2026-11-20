@@ -9,7 +9,7 @@
 //! failed   <why>
 //! ```
 //!
-//! The stage is `space`, `rereading`, `transferring` or `paused`; speed and
+//! The stage is `queued`, `space`, `rereading`, `transferring` or `paused`; speed and
 //! time left may be empty while not known. Cancel prints `cancel` and
 //! exits 1; closing after `done` exits 0.
 
@@ -127,15 +127,23 @@ impl eframe::App for Progress {
                     ui.label(line);
                     ui.weak(stage_text(stage));
                     ui.add_space(8.0);
-                    if ui
-                        .button(format!("{}  {}", icon::X, i18n::t("progress.cancel")))
-                        .clicked()
-                    {
-                        // `mickey` reads this and stops; the `.part` stays.
-                        println!("cancel");
-                        self.cancelled.store(true, Ordering::SeqCst);
-                        close(ui);
-                    }
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(format!("{}  {}", icon::X, i18n::t("progress.cancel")))
+                            .clicked()
+                        {
+                            // `mickey` reads this and stops; what arrived
+                            // stays, to resume.
+                            println!("cancel");
+                            self.cancelled.store(true, Ordering::SeqCst);
+                            close(ui);
+                        }
+                        // Out of the way; the transfer goes on.
+                        if ui.button(i18n::t("progress.minimize")).clicked() {
+                            ui.ctx()
+                                .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        }
+                    });
                 }
                 State::Done {
                     files,
@@ -186,6 +194,7 @@ impl eframe::App for Progress {
 /// The stage's words for the owner.
 fn stage_text(stage: &str) -> &'static str {
     match stage {
+        "queued" => i18n::t("progress.stage_queued"),
         "space" => i18n::t("progress.stage_space"),
         "rereading" => i18n::t("progress.stage_rereading"),
         "paused" => i18n::t("progress.stage_paused"),
