@@ -278,10 +278,10 @@ own files:
 - [x] Automatic fetches in the cache; brought ones in `Downloads/Mickey`.
 - [x] Free space checked before and during; the disk never fills.
 - [x] Every file verified with BLAKE3; summary with counts and skips. *(The Done window shows counts and lists, by name, the files that did not come: changed or gone on the other PC, or left out of the offer there, such as links and names Windows refuses. It opens for that even after a quick transfer.)*
-- [ ] Resume at the exact byte. *(Built and tested in `receive`, #475; the trigger starts every fetch afresh, so it is not used yet, #502.)*
+- [x] Resume at the exact byte. *(#475, wired in #504: an offer fetched again goes on from where it stopped. Checked by hand on 2026-11-19: Cancel at 93 MB, crossed again, it went on to the end.)*
 - [x] Changed and deleted source files handled and reported. *(Skipped, never sent half right, and listed by name in the Done window, never in the log.)*
 - [x] Links never followed; unsafe names skipped. *(Listing them to the owner: #502.)*
-- [ ] Progress window with real stages, a queue, Cancel, minimizable. *(Stages, Cancel and the queue work; a queued transfer shows nothing while it waits, and the window is not minimizable, #502.)*
+- [x] Progress window with real stages, a queue, Cancel, minimizable. *(Stages, Cancel and the queue; a queued transfer says it waits, with Cancel, and the window has Minimize, #517.)*
 - [x] The clipboard keeps working during a transfer.
 - [x] Mark of the Web from Mickey, Local intranet by default, configurable.
 - [x] Cleaning suggestion; abandoned `.part` removed after 7 days. *(The Bring question says how much `Downloads/Mickey` holds when it is over `[interface] clean_over_gb` (10) or the disk would drop under `clean_below_percent` (10) free, both in Settings > General. It lists the five biggest things, each with when it arrived, when it last changed or "never changed", and "incomplete" for a transfer that stopped; with Open folder. Received files do not keep their original modification time, so "arrived" is when the item was made here.)*
