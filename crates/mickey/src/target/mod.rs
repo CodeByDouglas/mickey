@@ -187,30 +187,37 @@ pub(super) fn serve_source(
     let lock = || trusted.lock_anyway();
     // The list is not held while the person decides.
     if !lock().is_trusted(&peer_key) {
+        // The PC that asked is told why, so it never shows a code nobody
+        // can compare (#420).
+        let not_paired = |mut link: crate::net::secure::Link, why| {
+            let _ = link.send(&protocol::Message::NotPaired { why });
+        };
         if !trust::pairing_open(trusted) {
             println!(
                 "mickey: {peer} asked to pair while pairing is closed; refused (open it in the settings' PCs tab, or `mickey pairing`)"
             );
-            return;
+            return not_paired(link, protocol::NotPairedWhy::Closed);
         }
         let who = found
             .and_then(|table| table.name_of(&peer_key))
             .unwrap_or_else(|| peer.ip().to_string());
-        match trust::ask_once(&peer_key, peer, &link.pairing_code(), &who) {
-            Ok(true) => {
+        let code = link.pairing_code();
+        match trust::ask_once(&peer_key, peer, &code, &who, &|| false) {
+            Ok(trust::Answer::Paired) => {
                 if let Err(err) = lock().add(peer_key, &peer.to_string()) {
                     eprintln!("mickey: {err}");
                     return;
                 }
                 println!("mickey: paired with {who}");
             }
-            Ok(false) => {
+            Ok(trust::Answer::NotPaired(why)) => {
                 println!("mickey: refused {peer}");
-                return;
+                return not_paired(link, why);
             }
+            Ok(trust::Answer::Stopped) => return,
             Err(err) => {
                 eprintln!("mickey: {err}");
-                return;
+                return not_paired(link, protocol::NotPairedWhy::Declined);
             }
         }
     }

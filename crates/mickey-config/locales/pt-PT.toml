@@ -194,6 +194,13 @@ join_says = "{by} diz que {name} é um dos teus computadores."
 join_can_use = "{icon}  Uma vez dentro, pode usar o teclado e rato deste computador."
 hotkeys_keep_own = "Definições, separador Atalhos de teclado: mantém os deste computador."
 window_title = "Mickey: emparelhar com outro computador"
+not_paired_with = "Não emparelhou com {name}"
+ok = "OK"
+not_paired_closed = "O emparelhamento de {name} está fechado. Abra-o lá (Definições, separador Computadores) e tente outra vez."
+not_paired_busy = "O outro computador está a responder a outro, ou foi chamado há pouco. Tente outra vez daqui a um minuto."
+not_paired_declined = "{name} recusou o emparelhamento com este computador."
+not_paired_no_answer = "{name} fechou a ligação ou não respondeu. Abra o emparelhamento lá (Definições, separador Computadores) e tente outra vez."
+not_paired_version = "O outro computador corre um Mickey que fala outro protocolo. Atualize os dois para a mesma versão."
 
 [history]
 title = "Histórico da área de transferência"

@@ -196,6 +196,13 @@ join_says = "{by} says {name} is one of your PCs."
 join_can_use = "{icon}  Once in, it can use this PC's keyboard and mouse."
 hotkeys_keep_own = "Settings, Hotkeys tab: keep this PC's own for good."
 window_title = "Mickey: pair with another PC"
+not_paired_with = "Not paired with {name}"
+ok = "OK"
+not_paired_closed = "{name}'s pairing is closed. Open it there (Settings, PCs tab), then try again."
+not_paired_busy = "The other PC is answering another one, or was asked a moment ago. Try again in a minute."
+not_paired_declined = "{name} said no to pairing with this PC."
+not_paired_no_answer = "{name} closed the connection or did not answer. Open pairing there (Settings, PCs tab) and try again."
+not_paired_version = "The other PC runs a Mickey that speaks another protocol. Update both to the same version."
 
 [history]
 title = "Clipboard history"

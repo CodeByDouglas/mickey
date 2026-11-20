@@ -242,6 +242,12 @@ fn main() -> ExitCode {
     if args.first().map(String::as_str) == Some("whats-new") {
         return whats_new::window();
     }
+    if let [command, who, why] = args.as_slice()
+        && command == "not-paired"
+    {
+        let why = why.clone();
+        return pair::window(who, pair::Ask::NotPaired { why });
+    }
     if let [command, who, code] = args.as_slice()
         && command == "pair"
     {

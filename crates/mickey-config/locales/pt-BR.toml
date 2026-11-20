@@ -194,6 +194,13 @@ join_says = "{by} diz que {name} é um dos seus PCs."
 join_can_use = "{icon}  Depois de entrar, ele pode usar o teclado e o mouse deste PC."
 hotkeys_keep_own = "Configurações, aba Atalhos: manter os deste PC de vez."
 window_title = "Mickey: parear com outro PC"
+not_paired_with = "Não pareou com {name}"
+ok = "OK"
+not_paired_closed = "O pareamento de {name} está fechado. Abra lá (Configurações, aba PCs) e tente de novo."
+not_paired_busy = "O outro PC está respondendo a outro, ou foi chamado agora há pouco. Tente de novo em um minuto."
+not_paired_declined = "{name} recusou o pareamento com este PC."
+not_paired_no_answer = "{name} fechou a conexão ou não respondeu. Abra o pareamento lá (Configurações, aba PCs) e tente de novo."
+not_paired_version = "O outro PC roda um Mickey que fala outro protocolo. Atualize os dois para a mesma versão."
 
 [history]
 title = "Histórico da área de transferência"
