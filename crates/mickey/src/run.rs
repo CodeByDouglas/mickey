@@ -409,7 +409,10 @@ fn run_from_config() -> Result<(), String> {
         trusted.clone(),
         offers.clone(),
     );
+    // Transfers get a folder of their own beside the clipboard's received
+    // files, so cleaning either never touches the other's.
     let transfers = crate::clipboard::received::base()
+        .map(|base| base.join("transfers"))
         .inspect_err(|err| eprintln!("mickey: {err}; files will cross only whole"))
         .ok()
         .map(|received| {

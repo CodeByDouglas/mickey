@@ -122,8 +122,8 @@ pub struct Transfers {
     pub identity: Arc<Identity>,
     /// This PC's input port, which its offers name.
     pub port: u16,
-    /// Where fetched files go, a fresh folder per transfer: the received
-    /// files' folder (`clipboard::received::base`).
+    /// Where fetched files go, a fresh folder per transfer: `transfers/`
+    /// in the received files' folder (`clipboard::received::base`).
     pub received: PathBuf,
     /// Files are fetched only from a paired PC.
     pub trusted: trust::Shared,
@@ -197,6 +197,19 @@ impl Fetches {
             Err((into, fetched)) => Fetch::Broken { into, fetched },
         };
         self.0.lock_anyway().insert(key, fetch);
+    }
+
+    /// The folders of transfers that broke and wait to go on: never
+    /// cleaned away, or they would start over.
+    fn waiting(&self) -> Vec<PathBuf> {
+        self.0
+            .lock_anyway()
+            .values()
+            .filter_map(|fetch| match fetch {
+                Fetch::Broken { into, .. } => Some(into.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Forgets `key`: the owner said Ignore, or it could not start.
@@ -351,7 +364,8 @@ impl Transfers {
     fn landing(&self, offer: &FileOffer, who: &str) -> Result<Option<PathBuf>, String> {
         let size = total(&offer.offer);
         if size <= ASK_OVER {
-            return crate::clipboard::received::new_folder(&self.received).map(Some);
+            let waiting = self.fetches.waiting();
+            return crate::clipboard::received::new_folder(&self.received, &waiting).map(Some);
         }
         if !ask_to_bring(offer, who, size) {
             println!(
