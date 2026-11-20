@@ -73,6 +73,23 @@ pub enum Message {
     Focus {
         here: bool,
     },
+    /// To a PC that asked to pair: no, and why, so it can say so instead
+    /// of showing a code nobody can compare (#420). Sent once, before the
+    /// connection closes.
+    NotPaired {
+        why: NotPairedWhy,
+    },
+}
+
+/// Why a PC did not pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotPairedWhy {
+    /// Its pairing is closed: its owner has to open it.
+    Closed,
+    /// Another PC is asking right now, or this one asked a moment ago.
+    Busy,
+    /// Its owner said no.
+    Declined,
 }
 
 const HELLO: u8 = 1;
@@ -90,6 +107,7 @@ const FOCUS: u8 = 12;
 const ARRANGE: u8 = 13;
 const REFUSED: u8 = 14;
 const PICKED: u8 = 15;
+const NOT_PAIRED: u8 = 16;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DecodeError {
@@ -176,6 +194,14 @@ pub fn encode(message: &Message, frame: &mut [u8; MAX_FRAME]) -> usize {
         Message::Focus { here } => put(&[FOCUS, u8::from(here)]),
         Message::Refused => put(&[REFUSED]),
         Message::Picked { card } => put(&[PICKED, card]),
+        Message::NotPaired { why } => put(&[
+            NOT_PAIRED,
+            match why {
+                NotPairedWhy::Closed => 0,
+                NotPairedWhy::Busy => 1,
+                NotPairedWhy::Declined => 2,
+            },
+        ]),
         Message::Arrange { x, y } => {
             put(&[ARRANGE]);
             put(&x.to_be_bytes());
@@ -250,6 +276,16 @@ pub fn decode(body: &[u8]) -> Result<Message, DecodeError> {
         PICKED => {
             let [card] = exact(kind, payload)?;
             Message::Picked { card }
+        }
+        NOT_PAIRED => {
+            let [why] = exact(kind, payload)?;
+            Message::NotPaired {
+                why: match why {
+                    0 => NotPairedWhy::Closed,
+                    1 => NotPairedWhy::Busy,
+                    _ => NotPairedWhy::Declined,
+                },
+            }
         }
         REFUSED => {
             let [] = exact(kind, payload)?;
@@ -357,6 +393,12 @@ mod tests {
         round_trip(Message::Arrange { x: 1536, y: -216 });
         round_trip(Message::Refused);
         round_trip(Message::Picked { card: 2 });
+        round_trip(Message::NotPaired {
+            why: NotPairedWhy::Closed,
+        });
+        round_trip(Message::NotPaired {
+            why: NotPairedWhy::Declined,
+        });
         round_trip(Message::Focus { here: false });
         assert_eq!(decode(&[FOCUS, 2]), Err(DecodeError::BadBool(2)));
         round_trip(Message::Leave {

@@ -11,6 +11,9 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
+- Pairing with a PC whose pairing is closed, or that says no, no longer
+  leaves a code on one screen only: the code closes at once and a window
+  says why and what to do.
 - On Windows, files from your other PCs no longer make SmartScreen or
   Office warn: they are marked as from your local network, and say which
   PC they came from. Settings > General can bring the warnings back.
