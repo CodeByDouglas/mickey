@@ -364,6 +364,11 @@ pub fn run(
         });
     }
     let mut in_control = InControl::default();
+    // Where the keyboard was before it came where it is: what the bring
+    // the clipboard hotkey takes the clipboard from (#437).
+    let mut came_from: Option<usize> = None;
+    // The owner pressed that hotkey: done at the top of the next turn.
+    let mut bring = false;
     // A hotkey being recorded: what was heard, where to answer, since when.
     let mut recording: Option<(Recording, Sender<String>, Instant)> = None;
     // The tray icon (PRD 0009); Mickey works the same without one.
@@ -547,6 +552,7 @@ pub fn run(
             Focus::Local | Focus::WaitingForKeysUp(_) => None,
         };
         if let Some(was) = in_control.focus_is(focus) {
+            came_from = was;
             // Motion summed here before the focus moved is about the last
             // stay: kept, it pushed the cursor back through the edge it
             // came home by.
@@ -562,6 +568,17 @@ pub fn run(
                     let _ = link.send(&Message::Focus { here: now_here });
                 }
             }
+        }
+        // Asked for: the clipboard of the PC the keyboard just left comes
+        // here, whatever `share` says, but never when it is off. From
+        // another PC, that PC still only answers within a few seconds of
+        // the keyboard leaving it (#185).
+        if std::mem::take(&mut bring)
+            && share != config::Share::Off
+            && came_from != focus
+            && let Some(data_links) = &data_links
+        {
+            data_links.moved(came_from, focus);
         }
         let here = in_control.here();
         let waiting_update = updates.as_ref().and_then(update::Updates::waiting);
@@ -689,6 +706,7 @@ pub fn run(
         let left = focus_machine.focus();
         let mut act = |action| match action {
             Action::OpenSwitcher => open = true,
+            Action::BringClipboard => bring = true,
             Action::OpenSwitcherOn(peer) => open_on = Some(peer),
             Action::Send(index, event) => {
                 if let Some(link) = &mut peers[index].link

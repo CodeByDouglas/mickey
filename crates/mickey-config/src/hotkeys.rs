@@ -19,6 +19,10 @@ pub struct Hotkeys {
     pub double_tap: Option<String>,
     /// How close the two taps must be, in milliseconds.
     pub double_tap_ms: Option<u64>,
+    /// Brings the clipboard from the PC the keyboard just left (#437):
+    /// how it crosses with `[clipboard] share = "hotkey"`. This PC's own,
+    /// like `share`: never sent to the others with the shared hotkeys.
+    pub clipboard: Option<String>,
 }
 
 impl Hotkeys {
@@ -98,6 +102,8 @@ pub struct HotkeySet {
     pub switcher: Chord,
     pub forward: Chord,
     pub back: Chord,
+    /// `None` when unset and its default is taken by another hotkey.
+    pub clipboard: Option<Chord>,
     /// `None` when turned off.
     pub double_tap: Option<u16>,
     /// Two taps closer than this are a double tap.
@@ -118,6 +124,9 @@ pub const DEFAULT_NEXT: &str = "AltGr+RightShift";
 pub const DEFAULT_FORWARD: &str = "AltGr+Right";
 
 pub const DEFAULT_BACK: &str = "AltGr+Left";
+
+/// Bring the clipboard: the M0 hotkey and C.
+pub const DEFAULT_CLIPBOARD: &str = "AltGr+RightShift+C";
 
 /// The switcher with one hand too: AltGr and the arrow above the others.
 pub const DEFAULT_SWITCHER: &str = "AltGr+Up";
@@ -194,6 +203,7 @@ impl Config {
             forward: one("hotkeys.forward", &self.hotkeys.forward)?
                 .unwrap_or_else(|| default(DEFAULT_FORWARD)),
             back: one("hotkeys.back", &self.hotkeys.back)?.unwrap_or_else(|| default(DEFAULT_BACK)),
+            clipboard: one("hotkeys.clipboard", &self.hotkeys.clipboard)?,
             double_tap,
             double_tap_window: std::time::Duration::from_millis(window),
             peers: self
@@ -208,6 +218,7 @@ impl Config {
             Some(&set.switcher),
             Some(&set.forward),
             Some(&set.back),
+            set.clipboard.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -217,6 +228,14 @@ impl Config {
             if all[..i].contains(chord) {
                 return Err(format!("two hotkeys use the same keys: {chord:?}"));
             }
+        }
+        // Its default only where nothing else uses it: a config.toml that
+        // already gave those keys to something else stays valid.
+        let wanted = default(DEFAULT_CLIPBOARD);
+        let free = set.clipboard.is_none() && !all.contains(&&wanted);
+        let mut set = set;
+        if free {
+            set.clipboard = Some(wanted);
         }
         Ok(set)
     }

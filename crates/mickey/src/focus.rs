@@ -40,6 +40,8 @@ pub enum Action {
     /// Show it on this peer, where the owner is looking: the focus stays
     /// there, and the peer sends the pick back.
     OpenSwitcherOn(usize),
+    /// Bring the clipboard from the PC the keyboard just left (#437).
+    BringClipboard,
 }
 
 pub struct FocusMachine {
@@ -99,6 +101,7 @@ impl FocusMachine {
                     Some(trigger @ (Trigger::Forward | Trigger::Back)) => {
                         self.go_to(step(None, trigger, online), online);
                     }
+                    Some(Trigger::BringClipboard) => act(Action::BringClipboard),
                     Some(Trigger::Home) | None => {}
                 }
             }
@@ -135,6 +138,7 @@ impl FocusMachine {
                     Some(Trigger::Next) if online.len() >= 2 => act(Action::OpenSwitcherOn(peer)),
                     // With one peer, Next simply comes back.
                     Some(Trigger::Next) => self.go_home(&mut act),
+                    Some(Trigger::BringClipboard) => act(Action::BringClipboard),
                     None => {}
                 }
             }
@@ -394,5 +398,44 @@ mod tests {
         let mut machine = FocusMachine::new();
         machine.grabbed();
         assert_eq!(machine.focus(), Focus::Local);
+    }
+
+    #[test]
+    fn the_bring_the_clipboard_hotkey_works_here_and_on_a_peer() {
+        /// The C key (evdev code).
+        const C: u16 = 46;
+        let chord = [KEY_RIGHTALT, KEY_RIGHTSHIFT, C];
+        let mut machine = FocusMachine::with_hotkeys(Hotkey::from_config(
+            &mickey_config::parse("[[peer]]\nname = \"A\"\naddress = \"192.0.2.10:1\"\n")
+                .unwrap()
+                .hotkeys()
+                .unwrap(),
+        ));
+        let press = |machine: &mut FocusMachine| {
+            let mut actions = Vec::new();
+            let events = chord
+                .iter()
+                .map(|&code| InputEvent::Key {
+                    code,
+                    pressed: true,
+                })
+                .chain(chord.iter().rev().map(|&code| InputEvent::Key {
+                    code,
+                    pressed: false,
+                }));
+            for event in events {
+                machine.handle(event, &[true], |action| actions.push(action));
+            }
+            actions.contains(&Action::BringClipboard)
+        };
+        assert!(press(&mut machine), "on this PC");
+        machine.go_to(Some(0), &[true]);
+        machine.grabbed();
+        assert!(press(&mut machine), "on a peer");
+        assert_eq!(
+            machine.focus(),
+            Focus::Remote(0),
+            "the keyboard stays there"
+        );
     }
 }

@@ -31,6 +31,8 @@ pub enum Trigger {
     /// The next or previous PC in the list, this PC included.
     Forward,
     Back,
+    /// Bring the clipboard from the PC the keyboard just left (#437).
+    BringClipboard,
 }
 
 /// One hotkey key pressed during the current attempt.
@@ -174,6 +176,9 @@ impl Hotkey {
         add(set.switcher.clone(), Trigger::Switcher);
         add(set.forward.clone(), Trigger::Forward);
         add(set.back.clone(), Trigger::Back);
+        if let Some(chord) = set.clipboard.clone() {
+            add(chord, Trigger::BringClipboard);
+        }
         add(
             set.home
                 .clone()
@@ -515,6 +520,26 @@ mod tests {
                 (events.to_vec(), vec![Trigger::Next])
             );
         }
+    }
+
+    #[test]
+    fn c_after_the_chord_brings_the_clipboard() {
+        /// The C key (evdev code).
+        const C: u16 = 46;
+        let events = [
+            key(ALT, true),
+            key(SHIFT, true),
+            key(C, true),
+            key(C, false),
+            key(SHIFT, false),
+            key(ALT, false),
+        ];
+        // The target sees AltGr and Right Shift, never the C.
+        let modifiers = [events[0], events[1], events[4], events[5]];
+        assert_eq!(
+            run(&mut all(), &events),
+            (modifiers.to_vec(), vec![Trigger::BringClipboard])
+        );
     }
 
     #[test]

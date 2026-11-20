@@ -200,6 +200,9 @@ pub enum Share {
     Auto,
     /// Never: nothing copied here leaves, nothing there comes back.
     Off,
+    /// Only when the owner asks, with `[hotkeys] clipboard` (#437): it
+    /// brings the clipboard from the PC the keyboard just left.
+    Hotkey,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -808,5 +811,24 @@ mod tests {
     fn errors_point_at_the_line() {
         let err = parse("\n\n[touchpad]\nspeed = \"fast\"\n").unwrap_err();
         assert!(err.contains("line 4"), "{err}");
+    }
+
+    #[test]
+    fn the_bring_the_clipboard_hotkey_never_breaks_an_older_config() {
+        let set = |text: &str| parse(text).unwrap().hotkeys();
+        let default = chord::parse(hotkeys::DEFAULT_CLIPBOARD).unwrap();
+        assert_eq!(set("").unwrap().clipboard, Some(default));
+        // Those keys already went to something else: no default, no error.
+        let taken = set("[hotkeys]\nswitcher = \"AltGr+RightShift+C\"\n").unwrap();
+        assert_eq!(taken.clipboard, None);
+        // Set by hand onto another hotkey's keys: an error, as for any two.
+        assert!(parse("[hotkeys]\nback = \"LeftCtrl+F9\"\nclipboard = \"LeftCtrl+F9\"\n").is_err());
+        assert_eq!(
+            parse("[clipboard]\nshare = \"hotkey\"\n")
+                .unwrap()
+                .clipboard
+                .share,
+            Share::Hotkey
+        );
     }
 }
