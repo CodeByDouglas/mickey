@@ -11,6 +11,8 @@
 //! 5  AskOffer as Ask, but copied files come as an offer (PRD 0015);
 //!             sent only to a PC that said it knows transfers
 //! 6  Offer    copied files as an offer: `transfer::trigger::FileOffer`
+//! 7  NotOffered  copied files that cannot be offered, and why (UTF-8):
+//!             too many, or gone; sent where an offer would be
 //! ```
 //!
 //! Files cross whole, at most `MAX_FILES` bytes together; folders are left
@@ -29,6 +31,7 @@ const NOTHING: u8 = 3;
 const FILES: u8 = 4;
 const ASK_OFFER: u8 = 5;
 const OFFER: u8 = 6;
+const NOT_OFFERED: u8 = 7;
 /// Room for the names under the data link's 64 MB.
 pub const MAX_FILES: u64 = 60 << 20;
 /// The most files one copy may carry.
@@ -48,6 +51,8 @@ pub enum Wire {
     AskOffer,
     /// Copied files as an offer, to fetch from the PC that made it.
     Offer(FileOffer),
+    /// Copied files that cannot be offered, and why: shown to the owner.
+    NotOffered(String),
 }
 
 pub fn encode(wire: &Wire) -> Result<Vec<u8>, String> {
@@ -55,6 +60,7 @@ pub fn encode(wire: &Wire) -> Result<Vec<u8>, String> {
         Wire::Ask => vec![ASK],
         Wire::AskOffer => vec![ASK_OFFER],
         Wire::Offer(offer) => [&[OFFER][..], &offer.encode()].concat(),
+        Wire::NotOffered(why) => [&[NOT_OFFERED][..], why.as_bytes()].concat(),
         Wire::Nothing => vec![NOTHING],
         Wire::Content(Content::Text(text)) => [&[TEXT], text.as_bytes()].concat(),
         Wire::Content(Content::Files(paths)) => {
@@ -104,6 +110,9 @@ pub fn decode(bytes: &[u8]) -> Result<Wire, String> {
         ASK if body.is_empty() => Ok(Wire::Ask),
         ASK_OFFER if body.is_empty() => Ok(Wire::AskOffer),
         OFFER => FileOffer::decode(body).map(Wire::Offer),
+        NOT_OFFERED => String::from_utf8(body.to_vec())
+            .map(Wire::NotOffered)
+            .map_err(|_| "a reason that is not UTF-8".to_string()),
         NOTHING if body.is_empty() => Ok(Wire::Nothing),
         TEXT => String::from_utf8(body.to_vec())
             .map(|text| Wire::Content(Content::Text(text)))
@@ -222,6 +231,9 @@ mod tests {
     fn every_message_round_trips() {
         round_trip(Wire::Ask);
         round_trip(Wire::AskOffer);
+        round_trip(Wire::NotOffered(
+            "more than 100000 files and folders".into(),
+        ));
         round_trip(Wire::Nothing);
         round_trip(Wire::Content(Content::Text("olá, Mickey".into())));
         round_trip(Wire::Content(Content::Text(String::new())));
