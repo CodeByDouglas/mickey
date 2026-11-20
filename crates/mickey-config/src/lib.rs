@@ -300,6 +300,16 @@ fn default_scroll_speed() -> i32 {
     DEFAULT_SCROLL_SPEED
 }
 
+/// The PC at `ip`, named as config.toml knows it; its address if
+/// config.toml does not list it, or cannot be read.
+pub fn peer_name_or_address(ip: std::net::IpAddr) -> String {
+    Config::load()
+        .ok()
+        .flatten()
+        .and_then(|config| config.peer_name(ip).map(str::to_string))
+        .unwrap_or_else(|| ip.to_string())
+}
+
 impl Config {
     /// The name config.toml gives the PC at `ip`, if it lists one there.
     pub fn peer_name(&self, ip: std::net::IpAddr) -> Option<&str> {

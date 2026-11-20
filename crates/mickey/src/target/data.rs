@@ -105,13 +105,13 @@ pub(super) fn serve_clipboard(
                                 if clipboard::sync::may_write(&grants, from) {
                                     Ok(())
                                 } else {
-                                    Err(peer_name(from))
+                                    Err(config::peer_name_or_address(from))
                                 }
                             },
                             |content| keeper.write(content),
                             payload,
                             || trusted.lock_anyway().is_trusted(&by),
-                            clip.transfers.as_ref().map(|transfers| (transfers, keeper)),
+                            clip.transfers.as_ref(),
                         );
                         // Ended: let go of its handle, unless a newer link
                         // from the same PC took its place already.
@@ -125,16 +125,6 @@ pub(super) fn serve_clipboard(
             });
         }
     });
-}
-
-/// The PC at `from`, named as config.toml knows it; its address if
-/// config.toml does not list it.
-pub(crate) fn peer_name(from: std::net::IpAddr) -> String {
-    config::Config::load()
-        .ok()
-        .flatten()
-        .and_then(|config| config.peer_name(from).map(str::to_string))
-        .unwrap_or_else(|| from.to_string())
 }
 
 /// One small message a peer sent on its data link, by `kind`: the group
@@ -171,7 +161,7 @@ fn on_payload(
             let lines = text.to_string();
             let _ = target_news.send(source::TargetNews::Hotkeys { lines, from });
         }
-        group::AUDIO_KEY => audio::heard_key(text, from, &peer_name(from)),
+        group::AUDIO_KEY => audio::heard_key(text, from, &config::peer_name_or_address(from)),
         group::AUDIO => {
             let _ = target_news.send(source::TargetNews::Audio(text.to_string()));
         }
