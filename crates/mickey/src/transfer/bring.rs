@@ -103,7 +103,11 @@ mod tests {
             entry("fotos-velhas.zip", file),
         ];
         entries.extend((0..5).map(|n| entry(&format!("{n}.txt"), file)));
-        let text = top_level(&Offer { id: 1, entries });
+        let text = top_level(&Offer {
+            id: 1,
+            entries,
+            left_out: Vec::new(),
+        });
         assert_eq!(text, "fotos/  (2)\nfotos-velhas.zip\n0.txt\n1.txt\n+3");
     }
 }

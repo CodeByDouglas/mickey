@@ -119,6 +119,7 @@ pub fn example(ip: Option<IpAddr>) -> FileOffer {
                     kind: Kind::File { size: 5 },
                 },
             ],
+            left_out: Vec::new(),
         },
     }
 }

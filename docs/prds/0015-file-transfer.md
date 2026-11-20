@@ -277,7 +277,7 @@ own files:
 - [x] Bring / Ignore above a configurable threshold. *(`[interface] bring_over_gb`, 1 by default, in Settings > General next to where the question appears; decimal gigabytes, as the windows show sizes.)*
 - [x] Automatic fetches in the cache; brought ones in `Downloads/Mickey`.
 - [x] Free space checked before and during; the disk never fills.
-- [ ] Every file verified with BLAKE3; summary with counts and skips. *(Verified; the Done window shows counts and lists files skipped because they changed or went on the other PC. Files the offering PC left out of the offer (links, names Windows refuses) are still only counted in its log: the receiving PC never learns their names.)*
+- [x] Every file verified with BLAKE3; summary with counts and skips. *(The Done window shows counts and lists, by name, the files that did not come: changed or gone on the other PC, or left out of the offer there, such as links and names Windows refuses. It opens for that even after a quick transfer.)*
 - [ ] Resume at the exact byte. *(Built and tested in `receive`, #475; the trigger starts every fetch afresh, so it is not used yet, #502.)*
 - [x] Changed and deleted source files handled and reported. *(Skipped, never sent half right, and listed by name in the Done window, never in the log.)*
 - [x] Links never followed; unsafe names skipped. *(Listing them to the owner: #502.)*
@@ -400,6 +400,12 @@ credited in the pull request that uses it, and in the changelog.
 - **Windows' mark** says `HostUrl=mickey://<PC>` and `ZoneId=1`; the
   clipboard's own small files say `mickey://` alone, since the data link
   does not name the PC.
+- **An offer says what it left out** (2026-11-20, #502): up to 100
+  names, each with why (a link, a name Windows refuses, a name that only
+  differs in case, not a file, unreadable). They are shown, never used
+  as paths, so the receiving PC only cleans them for display
+  (`fs::names::shown`). This changed the offer's bytes; transfers were
+  not released yet, so no older Mickey reads them.
 - **The margin is capped at 5 GB** (2026-11-19): "1 GB or 5% of the disk"
   meant 21 GB on the owner's 422 GB `/home`, and a 1.2 GB transfer was
   refused with 18 GB free. Now 1 GB or 5%, at most 5 GB. And a transfer

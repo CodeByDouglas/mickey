@@ -686,6 +686,7 @@ mod tests {
                 path: "huge.bin".into(),
                 kind: Kind::File { size: 1 << 50 },
             }],
+            left_out: Vec::new(),
         };
         let err = fetch(
             &mut fetching,
@@ -711,6 +712,7 @@ mod tests {
                 path: "x.bin".into(),
                 kind: Kind::File { size: 4 },
             }],
+            left_out: Vec::new(),
         };
         let liar = thread::spawn(move || {
             serving.recv_bulk().unwrap();

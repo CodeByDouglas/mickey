@@ -166,6 +166,7 @@ fn clipboard() {
                     path: "fotos/a.jpg".into(),
                     kind: crate::transfer::offer::Kind::File { size: 9 },
                 }],
+                left_out: Vec::new(),
             },
         }),
     ];
@@ -197,6 +198,7 @@ fn transfer() {
                 entry("fotos", Kind::Folder),
                 entry("fotos/praia.jpg", Kind::File { size: 1 << 33 }),
             ],
+            left_out: Vec::new(),
         }),
         Message::Fetch {
             offer: 42,

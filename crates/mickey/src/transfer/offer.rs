@@ -14,6 +14,9 @@ use std::time::SystemTime;
 /// folder with more (a big `node_modules`) is refused; the upgrade path is
 /// sending the offer in pages.
 pub const MAX_ENTRIES: usize = 100_000;
+/// The most left-out names an offer carries: enough to say what is
+/// missing, never a second listing.
+pub const MAX_LEFT_OUT: usize = 100;
 
 /// What crosses to the other PC: the copied tree, without content.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +26,9 @@ pub struct Offer {
     pub id: u64,
     /// Every folder comes before what is inside it.
     pub entries: Vec<Entry>,
+    /// What was copied but does not cross, and why (the first
+    /// `MAX_LEFT_OUT`), so the receiving PC can say so.
+    pub left_out: Vec<Skipped>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +55,7 @@ pub struct Listing {
 }
 
 /// Something copied that does not cross, and why: shown to the owner.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skipped {
     pub path: String,
     pub why: Why,
@@ -88,6 +94,7 @@ impl Listing {
         Offer {
             id,
             entries: self.entries.clone(),
+            left_out: self.skipped.iter().take(MAX_LEFT_OUT).cloned().collect(),
         }
     }
 }
@@ -248,6 +255,22 @@ mod tests {
                 why: Why::Link
             }]
         );
+        // The offer says so, for the receiving PC to show.
+        assert_eq!(listing.offer(1).left_out, listing.skipped);
+    }
+
+    #[test]
+    fn an_offer_carries_only_the_first_left_out_names() {
+        let listing = Listing {
+            skipped: (0..MAX_LEFT_OUT + 5)
+                .map(|n| Skipped {
+                    path: format!("{n}.lnk"),
+                    why: Why::Link,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(listing.offer(1).left_out.len(), MAX_LEFT_OUT);
     }
 
     #[cfg(unix)]
