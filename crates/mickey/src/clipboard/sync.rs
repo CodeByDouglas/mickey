@@ -74,7 +74,8 @@ pub fn answer(
             },
             Wire::Files(files) => match may_write() {
                 Ok(()) => {
-                    if let Some(paths) = save(files) {
+                    // Nothing came (only folders were copied): nothing pasted.
+                    if let Some(paths) = save(files).filter(|paths| !paths.is_empty()) {
                         write(Content::Files(paths));
                     }
                 }
@@ -82,6 +83,12 @@ pub fn answer(
                     eprintln!("mickey: files from {who}, a PC not in control here, were refused")
                 }
             },
+            Wire::NotOffered(why) => {
+                if may_write().is_ok() {
+                    let who = crate::target::data::peer_name(link.peer_ip()?);
+                    crate::transfer::show::failed(&who, &why);
+                }
+            }
             Wire::Offer(offer) => match (may_write(), transfers) {
                 (Ok(()), Some((transfers, keeper))) => {
                     transfers.fetch(offer, link.peer_ip()?, keeper.clone());
@@ -96,14 +103,15 @@ pub fn answer(
     }
 }
 
-/// Copied `paths` as an offer from this PC; as the files themselves (up to
-/// the clipboard's limit) if no offer can be made.
+/// Copied `paths` as an offer from this PC; or why not (too many, or gone),
+/// for the other PC to show: a folder never crosses whole, so sending the
+/// files whole instead would bring nothing.
 fn offer_or_files(transfers: &Transfers, paths: Vec<PathBuf>) -> Carried {
     match transfers.offer(&paths) {
         Ok(offer) => Carried::Offer(offer),
-        Err(err) => {
-            eprintln!("mickey: files not offered ({err}); sent whole if small enough");
-            Carried::Content(Content::Files(paths))
+        Err(why) => {
+            eprintln!("mickey: files not offered: {why}");
+            Carried::NotOffered(why)
         }
     }
 }
@@ -454,6 +462,8 @@ impl Offers<'_> {
 enum Carried {
     Content(Content),
     Offer(FileOffer),
+    /// Copied files that cannot be offered, and why.
+    NotOffered(String),
 }
 
 impl From<Carried> for Wire {
@@ -461,6 +471,7 @@ impl From<Carried> for Wire {
         match carried {
             Carried::Content(content) => Wire::Content(content),
             Carried::Offer(offer) => Wire::Offer(offer),
+            Carried::NotOffered(why) => Wire::NotOffered(why),
         }
     }
 }
@@ -508,6 +519,10 @@ fn carry(
                     offer.ip = Some(ip);
                     Some(Carried::Offer(offer))
                 }
+                Some(Ok((Wire::NotOffered(why), ip, _))) => {
+                    let who = crate::target::data::peer_name(ip);
+                    Some(Carried::NotOffered(format!("{who}: {why}")))
+                }
                 Some(Ok(_)) | None => None,
                 Some(Err(_)) => {
                     links.remove(&peer);
@@ -521,6 +536,7 @@ fn carry(
     };
     match (to, carried) {
         (None, Carried::Content(content)) => keeper.write(content),
+        (None, Carried::NotOffered(why)) => crate::transfer::show::failed("", &why),
         (None, Carried::Offer(offer)) => {
             if let Some(transfers) = offers.transfers
                 && let Some(ip) = offer.ip
@@ -535,6 +551,7 @@ fn carry(
             let kind = match &carried {
                 Carried::Content(content) => format!("{content:?}"),
                 Carried::Offer(_) => "an offer".to_string(),
+                Carried::NotOffered(_) => "files not offered".to_string(),
             };
             let wire = Wire::from(carried);
             let bytes = encode_or_nothing(&wire);
