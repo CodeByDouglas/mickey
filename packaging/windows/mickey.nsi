@@ -60,7 +60,9 @@ Section "Mickey"
   nsExec::Exec '"$SYSDIR\taskkill.exe" /im mickey-ui.exe /f'
   File "${BIN}\mickey.exe"
   File "${BIN}\mickey-ui.exe"
-  File "start-hidden.vbs"
+  ; The logon task once ran start-hidden.vbs through wscript, a command
+  ; line Defender flagged (#419); mickey-ui.exe start-mickey replaces it.
+  Delete "$INSTDIR\start-hidden.vbs"
   ; Mickey's license, and the notices of the crates built into it.
   File "${BIN}\LICENSE.txt"
   File "${BIN}\THIRD-PARTY-LICENSES.txt"
@@ -72,7 +74,7 @@ Section "Mickey"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Mickey"
   ; Mickey makes the task itself, as the settings window does: elevated only
   ; when its folder is writable by administrators alone (the default, under
-  ; Program Files), allowed on battery, through start-hidden.vbs.
+  ; Program Files), allowed on battery, through mickey-ui.exe start-mickey.
   nsExec::Exec '"$INSTDIR\mickey.exe" autostart on'
 
   ; Peers connect to the target; private networks only, never public ones.

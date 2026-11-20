@@ -224,6 +224,11 @@ fn cards(ui: &mut egui::Ui, choice: &Choice, width: f32) -> (Option<usize>, egui
 }
 
 fn main() -> ExitCode {
+    // First: the logon task's starter needs no window, nor the language.
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref() == Some("start-mickey") {
+        return start_mickey();
+    }
     // The language the owner picked in config.toml, or the system's. Each
     // window reads it through `i18n::t` and `i18n::tf` from here on.
     let language = mickey_config::Config::load()
@@ -361,6 +366,31 @@ fn settings_window() -> ExitCode {
         Err(err) => {
             eprintln!("mickey-ui: cannot open a window: {err}");
             ExitCode::from(2)
+        }
+    }
+}
+
+/// `mickey-ui start-mickey`, what the logon task runs (#419): starts
+/// `mickey.exe run`, next to this program, with no console window, and
+/// exits. This program has none itself (it is built for the Windows
+/// subsystem), so nothing shows at logon, and no script is needed.
+#[cfg(windows)]
+fn start_mickey() -> ExitCode {
+    use std::os::windows::process::CommandExt;
+    /// `CREATE_NO_WINDOW`: a console program started without a console.
+    const NO_WINDOW: u32 = 0x0800_0000;
+    let mickey = std::env::current_exe().map(|exe| exe.with_file_name("mickey.exe"));
+    let started = mickey.and_then(|mickey| {
+        std::process::Command::new(mickey)
+            .arg("run")
+            .creation_flags(NO_WINDOW)
+            .spawn()
+    });
+    match started {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("mickey-ui: cannot start mickey.exe: {err}");
+            ExitCode::FAILURE
         }
     }
 }

@@ -103,3 +103,12 @@ Bad, and known limits:
 - Code: `crates/mickey/src/autostart.rs`, `crates/mickey/src/net/trust.rs`
   (`dir`), `crates/mickey/src/platform/acl.rs`,
   `crates/mickey/src/main.rs`, `crates/mickey/src/run.rs`, `packaging/windows/mickey.nsi`.
+
+## Update (2026-11-20, #419)
+
+The logon task no longer runs `start-hidden.vbs` through `wscript`: it
+runs `mickey-ui.exe start-mickey`, and is made from an XML file written
+next to `mickey.exe` (admin-only when the task is elevated) instead of a
+`schtasks` command line. The rule above is unchanged: the task is elevated
+only when `install_is_safe` holds, which now checks `mickey.exe`,
+`mickey-ui.exe` and their folder.
