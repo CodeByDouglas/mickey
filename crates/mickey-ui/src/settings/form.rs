@@ -37,6 +37,8 @@ pub struct Form {
     pub position: String,
     /// Where the question about bringing big files appears.
     pub bring_position: String,
+    /// Over how many gigabytes files are asked about first.
+    pub bring_over_gb: u64,
     /// The switcher as a column.
     pub vertical: bool,
     /// Keep a clipboard history here: always, never (another manager keeps
@@ -102,6 +104,7 @@ impl Form {
                 .unwrap_or(config::DEFAULT_DOUBLE_TAP_MS),
             position: config.interface.switcher_position.clone(),
             bring_position: config.interface.bring_position.clone(),
+            bring_over_gb: config.interface.bring_over_gb,
             vertical: config.interface.switcher_vertical,
             history: config.clipboard.history,
             share: config.clipboard.share,
@@ -205,6 +208,12 @@ impl Form {
                 config::toml_string(&self.bring_position)
             );
         }
+        if self.bring_over_gb != config::Interface::default().bring_over_gb {
+            out += &format!(
+                "bring_over_gb = {}    # files over this are asked about first\n",
+                self.bring_over_gb
+            );
+        }
         if !self.order.is_empty() {
             let names: Vec<String> = self
                 .order
@@ -284,7 +293,7 @@ mod tests {
     #[test]
     fn what_the_form_writes_parses_back_to_the_same_form() {
         let original = config::parse(
-            "[[peer]]\nname = \"Windows \\\"main\\\"\"\naddress = \"192.0.2.10:4242\"\nhotkey = \"AltGr+RightShift+1\"\nposition = [-1920, 0]\nkey = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n\n[hotkeys]\nhome = \"AltGr+RightShift+H\"\n\n[interface]\nswitcher_position = \"top-left\"\n\n[clipboard]\nhistory = false\nshare = \"off\"\n\n[updates]\ncheck = false\n\n[audio]\nlistener = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\nmode = \"both\"\n\n[this_pc]\ncontrolled = false\nshare_hotkeys = false\nname = \"Desk\"\n\n[touchpad]\nspeed = 30\nscroll_speed = 10\nforward = false\ntap = \"on\"\nnatural_scroll = \"off\"\n",
+            "[[peer]]\nname = \"Windows \\\"main\\\"\"\naddress = \"192.0.2.10:4242\"\nhotkey = \"AltGr+RightShift+1\"\nposition = [-1920, 0]\nkey = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n\n[hotkeys]\nhome = \"AltGr+RightShift+H\"\n\n[interface]\nswitcher_position = \"top-left\"\nbring_over_gb = 5\n\n[clipboard]\nhistory = false\nshare = \"off\"\n\n[updates]\ncheck = false\n\n[audio]\nlistener = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\nmode = \"both\"\n\n[this_pc]\ncontrolled = false\nshare_hotkeys = false\nname = \"Desk\"\n\n[touchpad]\nspeed = 30\nscroll_speed = 10\nforward = false\ntap = \"on\"\nnatural_scroll = \"off\"\n",
         )
         .unwrap();
         let form = Form::from_config(&original);

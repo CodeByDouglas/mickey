@@ -1,12 +1,20 @@
-//! The question before a big transfer (PRD 0015): over `ASK_OVER`, the
+//! The question before a big transfer (PRD 0015): over `ask_over()`, the
 //! owner says Bring (to `Downloads/Mickey`) or Ignore, seeing what the
 //! files are (`mickey-ui bring`).
 
 use crate::transfer::offer::{Kind, Offer};
 
-/// Above this, a transfer is asked about first: Bring (to
-/// `Downloads/Mickey`) or Ignore.
-pub const ASK_OVER: u64 = 1 << 30;
+/// Above this many bytes, a transfer is asked about first: Bring (to
+/// `Downloads/Mickey`) or Ignore. The owner sets it (`[interface]
+/// bring_over_gb`), 1 GB by default.
+pub fn ask_over() -> u64 {
+    mickey_config::Config::load()
+        .ok()
+        .flatten()
+        .map(|config| config.interface)
+        .unwrap_or_default()
+        .bring_over()
+}
 
 /// Asks the owner whether to bring `size` bytes of files offered by
 /// `who`: Bring or Ignore, with what they are (`mickey-ui bring`, which

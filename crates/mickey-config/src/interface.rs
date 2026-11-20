@@ -20,6 +20,10 @@ pub struct Interface {
     /// corner or `center`, as the switcher's.
     #[serde(default = "default_bring_position")]
     pub bring_position: String,
+    /// Files over this many gigabytes are asked about before they come
+    /// (PRD 0015); `0` asks every time.
+    #[serde(default = "default_bring_over_gb")]
+    pub bring_over_gb: u64,
     /// The language of Mickey's windows and tray menu: `auto` (the
     /// system's), or a code from `i18n::Lang::ALL` such as `en`, `pt-BR`, `pt-PT`.
     #[serde(default = "default_language")]
@@ -33,12 +37,18 @@ impl Default for Interface {
             switcher_vertical: false,
             switcher_order: Vec::new(),
             bring_position: default_bring_position(),
+            bring_over_gb: default_bring_over_gb(),
             language: default_language(),
         }
     }
 }
 
 impl Interface {
+    /// Above this many bytes, files are asked about before they come.
+    pub fn bring_over(&self) -> u64 {
+        self.bring_over_gb.saturating_mul(1_000_000_000)
+    }
+
     /// The language to show: the chosen one, or the system's for `auto`
     /// (English when that is none Mickey is translated into). `Err` for a
     /// code Mickey does not know.
@@ -83,6 +93,10 @@ pub const SWITCHER_POSITIONS: [&str; 5] = [
 /// A notice about files arriving, out of the way.
 fn default_bring_position() -> String {
     "bottom-right".into()
+}
+
+fn default_bring_over_gb() -> u64 {
+    1
 }
 
 fn default_switcher_position() -> String {
