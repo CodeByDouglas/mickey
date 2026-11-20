@@ -193,31 +193,7 @@ fn name_of(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A fresh folder under the system's temp folder, removed on drop.
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new(name: &str) -> Scratch {
-            let dir =
-                std::env::temp_dir().join(format!("mickey-offer-{name}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            Scratch(dir)
-        }
-
-        fn file(&self, path: &str, bytes: &[u8]) {
-            let path = self.0.join(path);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, bytes).unwrap();
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_util::Scratch;
 
     fn paths(listing: &Listing) -> Vec<&str> {
         listing

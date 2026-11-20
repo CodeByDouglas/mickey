@@ -48,26 +48,7 @@ fn is_part(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    /// A fresh folder under the system's temp folder, removed on drop.
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new(name: &str) -> Scratch {
-            let dir =
-                std::env::temp_dir().join(format!("mickey-cleanup-{name}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            Scratch(dir)
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_util::Scratch;
 
     #[test]
     fn only_files_being_received_untouched_for_a_week_are_removed() {

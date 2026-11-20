@@ -21,9 +21,12 @@
 //! Everything decoded comes from the other PC: every path is checked, the
 //! counts and sizes are capped, and garbage is an error, never a panic.
 
+use crate::net::invalid;
+use crate::net::secure::Link;
 use crate::transfer::offer::{Entry, Kind, MAX_ENTRIES, Offer};
 use crate::transfer::path;
 use std::collections::HashSet;
+use std::io;
 
 const OFFER: u8 = 0;
 const FETCH: u8 = 1;
@@ -71,6 +74,22 @@ pub enum Why {
     Changed,
     /// Deleted, moved, or no longer readable.
     Gone,
+}
+
+/// Sends `message` on `link`.
+pub fn send(link: &mut Link, message: &Message) -> io::Result<()> {
+    link.send_bulk(&encode(message))
+}
+
+/// The next message on `link`, past any `StillHere` (which only says the
+/// other PC is still there).
+pub fn recv(link: &mut Link) -> io::Result<Message> {
+    loop {
+        match decode(&link.recv_bulk()?).map_err(invalid)? {
+            Message::StillHere => continue,
+            message => return Ok(message),
+        }
+    }
 }
 
 pub fn encode(message: &Message) -> Vec<u8> {

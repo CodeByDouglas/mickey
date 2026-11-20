@@ -14,6 +14,7 @@
 //! the payload's length (4 bytes), then the payload in messages of up to
 //! `BULK_CHUNK` bytes each.
 
+use super::invalid;
 use crate::net::identity::{Identity, NOISE_PARAMS};
 use crate::net::protocol::{self, MAX_FRAME, Message};
 use crate::threads::LockAnyway;
@@ -489,10 +490,6 @@ fn read_noise(stream: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
 /// snow's errors carry no key material, only what went wrong.
 fn noise_error(err: impl std::fmt::Display) -> io::Error {
     invalid(format!("secure link: {err}"))
-}
-
-fn invalid(message: String) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
 #[cfg(test)]
