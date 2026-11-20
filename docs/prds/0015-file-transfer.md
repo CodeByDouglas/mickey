@@ -119,9 +119,8 @@ is **Local intranet** by default: Defender still scans every file, but
 SmartScreen and Office's Protected View do not warn about the owner's own
 files. A setting switches to **Internet** for those warnings. The mark is
 written before the `.part` is renamed, so a file never exists without it.
-This also applies to small files that cross with the clipboard
-(*hypothesis*: that zone 1 silences SmartScreen and Protected View is
-from memory; the first PR that writes it checks it on Windows 10).
+This also applies to small files that cross with the clipboard.
+(Checked on Windows 10 on 2026-11-20, see *Discoveries*.)
 
 ### Cleaning up
 
@@ -400,6 +399,17 @@ credited in the pull request that uses it, and in the changelog.
 - **Windows' mark** says `HostUrl=mickey://<PC>` and `ZoneId=1`; the
   clipboard's own small files say `mickey://` alone, since the data link
   does not name the PC.
+- **The local zone keeps Windows quiet, the Internet zone does not**
+  (checked on Windows 10, 2026-11-20, #478). The same files, marked as
+  Mickey marks them (`ZoneId=1`, `HostUrl=mickey://…`) and as from the
+  Internet (`ZoneId=3`):
+  - an unsigned program ran at once with the first mark, and SmartScreen
+    stopped it ("Windows protected your PC") with the second;
+  - a `.docx` opened normally in Word with the first, and in Protected
+    View with the second.
+  - Opened with another program (WPS Office, there the default for
+    `.docx`), there is no Protected View at all: that is the program's,
+    not Mickey's.
 - **An offer says what it left out** (2026-11-20, #502): up to 100
   names, each with why (a link, a name Windows refuses, a name that only
   differs in case, not a file, unreadable). They are shown, never used
