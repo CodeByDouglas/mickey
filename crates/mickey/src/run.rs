@@ -409,25 +409,27 @@ fn run_from_config() -> Result<(), String> {
         trusted.clone(),
         offers.clone(),
     );
-    // Transfers get a folder of their own beside the clipboard's received
-    // files, so cleaning either never touches the other's.
-    let transfers = crate::clipboard::received::base()
-        .map(|base| base.join("transfers"))
-        .inspect_err(|err| eprintln!("mickey: {err}; files will cross only whole"))
-        .ok()
-        .map(|received| {
-            std::sync::Arc::new(crate::transfer::trigger::Transfers::new(
-                offers,
-                identity,
-                this_pc.listen.port(),
-                received,
-                trusted.clone(),
-            ))
-        });
     // One clipboard for the whole process (PRD 0011).
     let keeper = clipboard::Keeper::start()
         .inspect_err(|err| eprintln!("mickey: {err}; the clipboard will not be shared"))
         .ok();
+    // Transfers get a folder of their own beside the clipboard's received
+    // files, so cleaning either never touches the other's. Copy and paste
+    // triggers them: no clipboard, no transfers.
+    let received = crate::clipboard::received::base()
+        .map(|base| base.join("transfers"))
+        .inspect_err(|err| eprintln!("mickey: {err}; files will cross only whole"))
+        .ok();
+    let transfers = received.zip(keeper.clone()).map(|(received, keeper)| {
+        std::sync::Arc::new(crate::transfer::trigger::Transfers::new(
+            offers,
+            identity,
+            this_pc.listen.port(),
+            received,
+            trusted.clone(),
+            keeper,
+        ))
+    });
     let target = this_pc.controlled.then(|| {
         let (listen, found, keeper) = (this_pc.listen, found.clone(), keeper.clone());
         let (trusted, transfers) = (trusted.clone(), transfers.clone());

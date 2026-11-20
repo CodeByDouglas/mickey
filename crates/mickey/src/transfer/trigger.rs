@@ -33,6 +33,8 @@ pub struct Transfers {
     pub received: PathBuf,
     /// Files are fetched only from a paired PC.
     pub trusted: trust::Shared,
+    /// This PC's clipboard, where fetched files are pasted.
+    keeper: Keeper,
     /// Each file or folder transfers brought here, and the PC it came from:
     /// they are never sent back there (#424). As long as Mickey runs.
     came_from: std::sync::Mutex<Vec<(PathBuf, [u8; 32])>>,
@@ -48,13 +50,15 @@ pub struct Transfers {
 
 impl Transfers {
     /// Offers this PC's copied files from `offers`, as `identity`, naming
-    /// `port`; fetches others' into `received`, from paired PCs only.
+    /// `port`; fetches others' into `received`, from paired PCs only, and
+    /// pastes them in `keeper`'s clipboard.
     pub fn new(
         offers: Arc<Offers>,
         identity: Arc<Identity>,
         port: u16,
         received: PathBuf,
         trusted: trust::Shared,
+        keeper: Keeper,
     ) -> Transfers {
         Transfers {
             offers,
@@ -62,6 +66,7 @@ impl Transfers {
             port,
             received,
             trusted,
+            keeper,
             came_from: Default::default(),
             lanes: Default::default(),
             fetches: Default::default(),
@@ -113,7 +118,7 @@ impl Transfers {
     /// Fetches `offer` (which came from the PC at `from`) on a thread of its
     /// own, and once every file is there and verified puts them on the
     /// clipboard, unless something else was copied meanwhile.
-    pub fn fetch(self: &Arc<Self>, offer: FileOffer, from: IpAddr, keeper: Keeper) {
+    pub fn fetch(self: &Arc<Self>, offer: FileOffer, from: IpAddr) {
         // Files that came from here: this PC has them already, and its
         // clipboard keeps what it holds.
         if offer.origin == Some(*self.identity.public()) {
@@ -122,10 +127,10 @@ impl Transfers {
         let this = Arc::clone(self);
         crate::threads::spawn("transfer fetch", move || {
             let key = (offer.key, offer.offer.id);
-            let who = crate::target::data::peer_name(offer.ip.unwrap_or(from));
+            let who = mickey_config::peer_name_or_address(offer.ip.unwrap_or(from));
             let (into, mut fetched) = match this.fetches.begin(key) {
                 Begin::Skip => return,
-                Begin::Here(landed) => return keeper.write(Content::Files(landed)),
+                Begin::Here(landed) => return this.keeper.write(Content::Files(landed)),
                 Begin::Resume(into, fetched) => (into, *fetched),
                 Begin::Start => match this.landing(&offer, &who) {
                     Ok(Some(into)) => {
@@ -139,13 +144,13 @@ impl Transfers {
                     }
                 },
             };
-            let before = keeper.read();
+            let before = this.keeper.read();
             let result = this.fetch_shown(&offer, from, &who, &into, &mut fetched);
             match &result {
                 // Everything skipped by the other PC: nothing to paste.
                 Ok(landed) if landed.is_empty() => {}
-                Ok(landed) if keeper.read() == before => {
-                    keeper.write(Content::Files(landed.clone()))
+                Ok(landed) if this.keeper.read() == before => {
+                    this.keeper.write(Content::Files(landed.clone()))
                 }
                 Ok(_) => println!(
                     "mickey: files arrived in {}, not pasted: something else was copied meanwhile",
@@ -269,9 +274,16 @@ mod tests {
     use super::*;
     use crate::test_util::{Scratch, free_input_port};
 
-    /// A PC called `name`, its files under `scratch`, offering on `port`
-    /// and trusting the PC with `key`, if given.
-    fn pc(scratch: &Scratch, name: &str, port: u16, key: Option<[u8; 32]>) -> Arc<Transfers> {
+    /// A PC called `name`, its files under `scratch`, offering on `port`,
+    /// trusting the PC with `key`, if given, and with `copied` in its
+    /// clipboard.
+    fn pc(
+        scratch: &Scratch,
+        name: &str,
+        port: u16,
+        key: Option<[u8; 32]>,
+        copied: Option<Content>,
+    ) -> Arc<Transfers> {
         let dir = scratch.0.join(name);
         std::fs::create_dir_all(dir.join("trust")).unwrap();
         let mut peers = trust::TrustedPeers::load(&dir.join("trust")).unwrap();
@@ -284,13 +296,14 @@ mod tests {
             port,
             dir.join("received"),
             Arc::new(std::sync::Mutex::new(peers)),
+            Keeper::in_memory(copied),
         ))
     }
 
     #[test]
     fn copied_files_that_are_gone_are_not_offered() {
         let scratch = Scratch::new("gone");
-        let transfers = pc(&scratch, "pc", 1, None);
+        let transfers = pc(&scratch, "pc", 1, None, None);
         // Copied, then deleted before the keyboard crossed.
         assert!(
             transfers
@@ -302,7 +315,7 @@ mod tests {
     #[test]
     fn files_offered_by_a_pc_not_paired_are_not_fetched() {
         let scratch = Scratch::new("unpaired");
-        let b = pc(&scratch, "pc", 1, None);
+        let b = pc(&scratch, "pc", 1, None, None);
         // Refused before any connection: nothing listens at that address.
         let Err(err) = b.connect(
             &crate::transfer::file_offer::example(None),
@@ -322,7 +335,7 @@ mod tests {
         std::fs::write(from.join("y.txt"), b"y").unwrap();
         // PC A serves what it hands out.
         let listen = free_input_port();
-        let a = pc(&scratch, "a", listen.port(), None);
+        let a = pc(&scratch, "a", listen.port(), None, None);
         let offers = Arc::clone(&a.offers);
         crate::transfer::listen::listen(
             listen,
@@ -336,7 +349,7 @@ mod tests {
         // X is copied and crosses; then Y, before X has arrived.
         let x = a.offer(&[from.join("x.bin")]).unwrap();
         let y = a.offer(&[from.join("y.txt")]).unwrap();
-        let b = pc(&scratch, "b", 1, Some(*a.identity.public()));
+        let b = pc(&scratch, "b", 1, Some(*a.identity.public()), None);
         let fetch = |offer: FileOffer, name: &'static str| {
             let (b, into) = (Arc::clone(&b), scratch.0.join(name));
             std::fs::create_dir_all(&into).unwrap();
@@ -364,7 +377,8 @@ mod tests {
         std::fs::write(fotos.join("a.txt"), b"hello").unwrap();
         // PC A, where the folder is copied: it serves its offers.
         let listen = free_input_port();
-        let a = pc(&scratch, "a", listen.port(), None);
+        let a_copied = Content::Files(vec![fotos.clone()]);
+        let a = pc(&scratch, "a", listen.port(), None, Some(a_copied));
         let offers = Arc::clone(&a.offers);
         crate::transfer::listen::listen(
             listen,
@@ -379,11 +393,10 @@ mod tests {
         let data = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let data_at = data.local_addr().unwrap();
         let a_side = Arc::clone(&a);
-        let a_keeper = Keeper::in_memory(Some(Content::Files(vec![fotos.clone()])));
         std::thread::spawn(move || {
             let (stream, _) = data.accept().unwrap();
             let link = Link::respond(stream, &a_side.identity).unwrap();
-            let read = || a_keeper.read();
+            let read = || a_side.keeper.read();
             let _ = crate::clipboard::sync::answer(
                 link,
                 read,
@@ -391,7 +404,7 @@ mod tests {
                 |_| {},
                 |_, _| {},
                 || true,
-                Some((&a_side, &a_keeper)),
+                Some(&a_side),
             );
         });
         let source = Identity::generate().unwrap();
@@ -407,13 +420,13 @@ mod tests {
             (None, listen.port(), *a.identity.public())
         );
         // PC B fetches it from A, and pastes it once it is all there.
-        let b = pc(&scratch, "b", 1, Some(*a.identity.public()));
-        let b_keeper = Keeper::in_memory(Some(Content::Text("copied before".into())));
-        b.fetch(offer, listen.ip(), b_keeper.clone());
+        let b_copied = Content::Text("copied before".into());
+        let b = pc(&scratch, "b", 1, Some(*a.identity.public()), Some(b_copied));
+        b.fetch(offer, listen.ip());
         let pasted = (0..100)
             .find_map(|_| {
                 std::thread::sleep(std::time::Duration::from_millis(50));
-                match b_keeper.read() {
+                match b.keeper.read() {
                     Some(Content::Files(paths)) => Some(paths),
                     _ => None,
                 }
@@ -426,10 +439,10 @@ mod tests {
         // fetches it back (#424): its clipboard keeps what it holds.
         let back = b.offer(&pasted).unwrap();
         assert_eq!(back.origin, Some(*a.identity.public()));
-        let a_clipboard = Keeper::in_memory(Some(Content::Text("A's own".into())));
+        a.keeper.write(Content::Text("A's own".into()));
         // Refused before any thread starts: nothing to wait for.
-        a.fetch(back, listen.ip(), a_clipboard.clone());
-        assert_eq!(a_clipboard.read(), Some(Content::Text("A's own".into())));
+        a.fetch(back, listen.ip());
+        assert_eq!(a.keeper.read(), Some(Content::Text("A's own".into())));
         assert!(!scratch.0.join("a/received").exists(), "nothing fetched");
     }
 }

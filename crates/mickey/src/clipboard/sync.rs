@@ -32,7 +32,7 @@ pub fn answer(
     write: impl Fn(Content),
     other: impl Fn(u8, &str),
     still_trusted: impl Fn() -> bool,
-    transfers: Option<(&Arc<Transfers>, &Keeper)>,
+    transfers: Option<&Arc<Transfers>>,
 ) -> io::Result<()> {
     // What this PC and the source last exchanged: asked again for the same,
     // this PC answers `Nothing` instead of sending it back (#424).
@@ -59,7 +59,7 @@ pub fn answer(
                 let wants_offer = message == Wire::AskOffer;
                 let content = read().filter(|content| !already(shared, content));
                 let reply = match (content, transfers) {
-                    (Some(Content::Files(paths)), Some((transfers, _))) if wants_offer => {
+                    (Some(Content::Files(paths)), Some(transfers)) if wants_offer => {
                         offer_or_files(transfers, paths).into()
                     }
                     (content, _) => content.map_or(Wire::Nothing, |content| {
@@ -88,28 +88,28 @@ pub fn answer(
                         write(Content::Files(paths));
                     }
                 }
-                Err(who) => {
-                    eprintln!("mickey: files from {who}, a PC not in control here, were refused")
-                }
+                Err(who) => refused_files(&who),
             },
             Wire::NotOffered(why) => {
                 if may_write().is_ok() {
-                    let who = crate::target::data::peer_name(link.peer_ip()?);
+                    let who = mickey_config::peer_name_or_address(link.peer_ip()?);
                     crate::transfer::show::failed(&who, &why);
                 }
             }
             Wire::Offer(offer) => match (may_write(), transfers) {
-                (Ok(()), Some((transfers, keeper))) => {
-                    transfers.fetch(offer, link.peer_ip()?, keeper.clone());
-                }
+                (Ok(()), Some(transfers)) => transfers.fetch(offer, link.peer_ip()?),
                 (Ok(()), None) => eprintln!("mickey: files offered, but this PC cannot fetch them"),
-                (Err(who), _) => {
-                    eprintln!("mickey: files from {who}, a PC not in control here, were refused")
-                }
+                (Err(who), _) => refused_files(&who),
             },
             Wire::Nothing => {}
         }
     }
+}
+
+/// Logs files refused from `who`, a PC whose keyboard is not here; never
+/// what they were.
+fn refused_files(who: &str) {
+    eprintln!("mickey: files from {who}, a PC not in control here, were refused");
 }
 
 /// Whether `content` is what two PCs last exchanged (`shared`), so the
@@ -248,17 +248,7 @@ pub fn focus_changed(grants: &Grants, ip: std::net::IpAddr, here: bool) {
 /// focus change travel on different links, so the change may still be on
 /// its way: it is waited for, briefly.
 pub fn may_read(grants: &Grants, ip: std::net::IpAddr) -> bool {
-    let started = Instant::now();
-    loop {
-        let allowed = grants
-            .lock_anyway()
-            .get_mut(&ip)
-            .is_some_and(|grant| grant.take(Instant::now()));
-        if allowed || started.elapsed() > std::time::Duration::from_millis(500) {
-            return allowed;
-        }
-        thread::sleep(std::time::Duration::from_millis(25));
-    }
+    wait_for(grants, ip, |grant| grant.take(Instant::now()))
 }
 
 /// Whether the source at `ip` may put something in this PC's clipboard
@@ -268,16 +258,22 @@ pub fn may_read(grants: &Grants, ip: std::net::IpAddr) -> bool {
 /// clipboard and the focus change travel on different links, so the change
 /// is waited for, briefly, as for `may_read`.
 pub fn may_write(grants: &Grants, ip: std::net::IpAddr) -> bool {
+    wait_for(grants, ip, |grant| grant.in_control())
+}
+
+/// Whether `check` passes for the source at `ip`, asked again for a short
+/// while: the focus change it depends on travels on the other link.
+fn wait_for(grants: &Grants, ip: std::net::IpAddr, check: impl Fn(&mut ClipGrant) -> bool) -> bool {
+    /// The longest a focus change can trail the clipboard.
+    const UP_TO: std::time::Duration = std::time::Duration::from_millis(500);
+    const EVERY: std::time::Duration = std::time::Duration::from_millis(25);
     let started = Instant::now();
     loop {
-        let allowed = grants
-            .lock_anyway()
-            .get(&ip)
-            .is_some_and(ClipGrant::in_control);
-        if allowed || started.elapsed() > std::time::Duration::from_millis(500) {
+        let allowed = grants.lock_anyway().get_mut(&ip).is_some_and(&check);
+        if allowed || started.elapsed() > UP_TO {
             return allowed;
         }
-        thread::sleep(std::time::Duration::from_millis(25));
+        thread::sleep(EVERY);
     }
 }
 
@@ -532,61 +528,16 @@ impl From<Carried> for Wire {
 /// moved again.
 fn carry(
     keeper: &Keeper,
-    Peers { links, shared }: Peers,
+    mut peers: Peers,
     takers: OfferTakers,
     (from, to): (Option<usize>, Option<usize>),
     current: impl Fn() -> bool,
 ) {
     let started = Instant::now();
-    let both_take_offers = takers.takes(from) && takers.takes(to);
+    let offers = takers.takes(from) && takers.takes(to);
     let carried = match from {
-        None => keeper
-            .read()
-            .map(|content| match (content, takers.transfers) {
-                // This PC's own files, to a peer that takes an offer.
-                (Content::Files(paths), Some(transfers)) if both_take_offers && to.is_some() => {
-                    offer_or_files(transfers, paths)
-                }
-                (content, _) => Carried::Content(content),
-            }),
-        Some(peer) => {
-            let ask = if both_take_offers {
-                Wire::AskOffer
-            } else {
-                Wire::Ask
-            };
-            let asked = links.get_mut(&peer).map(|link| {
-                link.send_bulk(&wire::encode(&ask).map_err(io::Error::other)?)?;
-                let answer = wire::decode(&recv_clipboard(link)?).map_err(io::Error::other)?;
-                Ok::<_, io::Error>((answer, link.peer_ip()?, *link.peer_key()))
-            });
-            match asked {
-                Some(Ok((Wire::Content(content), _, _))) => {
-                    if let Some(fingerprint) = content.fingerprint() {
-                        shared.insert(peer, fingerprint);
-                    }
-                    Some(Carried::Content(content))
-                }
-                Some(Ok((Wire::Files(files), _, _))) => {
-                    save(files).map(|paths| Carried::Content(Content::Files(paths)))
-                }
-                // A peer offers only its own files, from its own address:
-                // the one its data link comes from, whatever it says.
-                Some(Ok((Wire::Offer(mut offer), ip, key))) if offer.key == key => {
-                    offer.ip = Some(ip);
-                    Some(Carried::Offer(offer))
-                }
-                Some(Ok((Wire::NotOffered(why), ip, _))) => {
-                    let who = crate::target::data::peer_name(ip);
-                    Some(Carried::NotOffered(format!("{who}: {why}")))
-                }
-                Some(Ok(_)) | None => None,
-                Some(Err(_)) => {
-                    links.remove(&peer);
-                    None
-                }
-            }
-        }
+        None => read_here(keeper, takers.transfers.filter(|_| offers && to.is_some())),
+        Some(peer) => ask_peer(&mut peers, peer, offers),
     };
     let Some(carried) = carried else {
         return;
@@ -594,49 +545,106 @@ fn carry(
     if !current() {
         return;
     }
-    match (to, carried) {
-        (None, Carried::Content(content)) => keeper.write(content),
-        (None, Carried::NotOffered(why)) => crate::transfer::show::failed("", &why),
-        (None, Carried::Offer(offer)) => {
-            if let Some(transfers) = takers.transfers
+    match to {
+        None => put_here(keeper, takers.transfers, carried),
+        Some(peer) => send_to_peer(&mut peers, peer, carried, started),
+    }
+}
+
+/// What is copied on this PC; copied files as an offer, with `transfers`.
+fn read_here(keeper: &Keeper, transfers: Option<&Arc<Transfers>>) -> Option<Carried> {
+    keeper.read().map(|content| match (content, transfers) {
+        (Content::Files(paths), Some(transfers)) => offer_or_files(transfers, paths),
+        (content, _) => Carried::Content(content),
+    })
+}
+
+/// What is copied on `peer`, asked over its data link; copied files as an
+/// offer, if `offers`. A link that fails is dropped.
+fn ask_peer(peers: &mut Peers, peer: usize, offers: bool) -> Option<Carried> {
+    let ask = if offers { Wire::AskOffer } else { Wire::Ask };
+    let asked = peers.links.get_mut(&peer).map(|link| {
+        link.send_bulk(&wire::encode(&ask).map_err(io::Error::other)?)?;
+        let answer = wire::decode(&recv_clipboard(link)?).map_err(io::Error::other)?;
+        Ok::<_, io::Error>((answer, link.peer_ip()?, *link.peer_key()))
+    });
+    match asked {
+        Some(Ok((Wire::Content(content), _, _))) => {
+            if let Some(fingerprint) = content.fingerprint() {
+                peers.shared.insert(peer, fingerprint);
+            }
+            Some(Carried::Content(content))
+        }
+        Some(Ok((Wire::Files(files), _, _))) => {
+            save(files).map(|paths| Carried::Content(Content::Files(paths)))
+        }
+        // A peer offers only its own files, from its own address: the one
+        // its data link comes from, whatever it says.
+        Some(Ok((Wire::Offer(mut offer), ip, key))) if offer.key == key => {
+            offer.ip = Some(ip);
+            Some(Carried::Offer(offer))
+        }
+        Some(Ok((Wire::NotOffered(why), ip, _))) => {
+            let who = mickey_config::peer_name_or_address(ip);
+            Some(Carried::NotOffered(format!("{who}: {why}")))
+        }
+        Some(Ok(_)) | None => None,
+        Some(Err(_)) => {
+            peers.links.remove(&peer);
+            None
+        }
+    }
+}
+
+/// Puts `carried` on this PC: in its clipboard, or fetched first.
+fn put_here(keeper: &Keeper, transfers: Option<&Arc<Transfers>>, carried: Carried) {
+    match carried {
+        Carried::Content(content) => keeper.write(content),
+        Carried::NotOffered(why) => crate::transfer::show::failed("", &why),
+        Carried::Offer(offer) => {
+            if let Some(transfers) = transfers
                 && let Some(ip) = offer.ip
             {
-                transfers.fetch(offer, ip, keeper.clone());
+                transfers.fetch(offer, ip);
             }
         }
-        // The peer has it already: it was sent there, or came from there.
-        (Some(peer), Carried::Content(content))
-            if already(shared.get(&peer).copied(), &content) => {}
-        (Some(peer), carried) => {
-            let Some(link) = links.get_mut(&peer) else {
-                return;
-            };
-            if let Carried::Content(content) = &carried {
-                match content.fingerprint() {
-                    Some(fingerprint) => shared.insert(peer, fingerprint),
-                    None => shared.remove(&peer),
-                };
-            }
-            let kind = match &carried {
-                Carried::Content(content) => format!("{content:?}"),
-                Carried::Offer(_) => "an offer".to_string(),
-                Carried::NotOffered(_) => "files not offered".to_string(),
-            };
-            let wire = Wire::from(carried);
-            let bytes = encode_or_nothing(&wire);
-            let sent = link.send_bulk(&bytes).map(|()| bytes.len());
-            match sent {
-                // The kind and size only: the content may be secret.
-                Ok(len) if len > 64 << 10 => println!(
-                    "mickey: clipboard ({kind}) sent as {} KB in {} ms",
-                    len >> 10,
-                    started.elapsed().as_millis()
-                ),
-                Ok(_) => {}
-                Err(_) => {
-                    links.remove(&peer);
-                }
-            }
+    }
+}
+
+/// Sends `carried` to `peer`, unless it has it already. A link that fails
+/// is dropped.
+fn send_to_peer(peers: &mut Peers, peer: usize, carried: Carried, started: Instant) {
+    /// Over this, how long a send took is logged.
+    const LOG_OVER: usize = 64 << 10;
+    if let Carried::Content(content) = &carried {
+        // It was sent there, or came from there.
+        if already(peers.shared.get(&peer).copied(), content) {
+            return;
+        }
+        match content.fingerprint() {
+            Some(fingerprint) => peers.shared.insert(peer, fingerprint),
+            None => peers.shared.remove(&peer),
+        };
+    }
+    let Some(link) = peers.links.get_mut(&peer) else {
+        return;
+    };
+    let kind = match &carried {
+        Carried::Content(content) => format!("{content:?}"),
+        Carried::Offer(_) => "an offer".to_string(),
+        Carried::NotOffered(_) => "files not offered".to_string(),
+    };
+    let bytes = encode_or_nothing(&Wire::from(carried));
+    match link.send_bulk(&bytes) {
+        // The kind and size only: the content may be secret.
+        Ok(()) if bytes.len() > LOG_OVER => println!(
+            "mickey: clipboard ({kind}) sent as {} KB in {} ms",
+            bytes.len() >> 10,
+            started.elapsed().as_millis()
+        ),
+        Ok(()) => {}
+        Err(_) => {
+            peers.links.remove(&peer);
         }
     }
 }
