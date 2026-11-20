@@ -7,6 +7,7 @@
 use crate::net::secure::Link;
 use crate::threads::LockAnyway;
 use crate::transfer::progress::{self, Progress, Stage};
+use crate::transfer::wire::Why;
 use std::io::{BufRead, Write};
 use std::process::{ChildStdin, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -24,6 +25,9 @@ pub enum Ended {
         files: usize,
         bytes: u64,
         folder: String,
+        /// Files the other PC did not send (changed or gone there), by
+        /// name: shown in the window only, never logged.
+        skipped: Vec<(String, Why)>,
     },
     Failed(String),
 }
@@ -169,7 +173,8 @@ fn progress_line(progress: &Progress) -> String {
     )
 }
 
-/// `done\t<files>\t<bytes>\t<folder>` or `failed\t<why>`, on one line.
+/// `done\t<files>\t<bytes>\t<folder>`, after one `skipped\t<why>\t<name>`
+/// line per skipped file; or `failed\t<why>`.
 fn ended_line(how: &Ended) -> String {
     let flat = |text: &str| text.replace(['\t', '\n', '\r'], " ");
     match how {
@@ -177,7 +182,21 @@ fn ended_line(how: &Ended) -> String {
             files,
             bytes,
             folder,
-        } => format!("done\t{files}\t{bytes}\t{}", flat(folder)),
+            skipped,
+        } => {
+            let mut lines: Vec<String> = skipped
+                .iter()
+                .map(|(name, why)| {
+                    let why = match why {
+                        Why::Changed => "changed",
+                        Why::Gone => "gone",
+                    };
+                    format!("skipped\t{why}\t{}", flat(name))
+                })
+                .collect();
+            lines.push(format!("done\t{files}\t{bytes}\t{}", flat(folder)));
+            lines.join("\n")
+        }
         Ended::Failed(why) => format!("failed\t{}", flat(why)),
     }
 }
@@ -203,8 +222,22 @@ mod tests {
             files: 3,
             bytes: 42,
             folder: "/home/ana/Downloads/Mickey".into(),
+            skipped: vec![],
         };
         assert_eq!(ended_line(&done), "done\t3\t42\t/home/ana/Downloads/Mickey");
+        let some_skipped = Ended::Done {
+            files: 1,
+            bytes: 5,
+            folder: "/d".into(),
+            skipped: vec![
+                ("fotos/a.jpg".into(), Why::Changed),
+                ("b.txt".into(), Why::Gone),
+            ],
+        };
+        assert_eq!(
+            ended_line(&some_skipped),
+            "skipped\tchanged\tfotos/a.jpg\nskipped\tgone\tb.txt\ndone\t1\t5\t/d"
+        );
         let failed = Ended::Failed("cannot reach\n192.0.2.7".into());
         assert_eq!(ended_line(&failed), "failed\tcannot reach 192.0.2.7");
     }
