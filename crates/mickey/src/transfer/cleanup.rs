@@ -1,14 +1,47 @@
 //! Keeping `Downloads/Mickey` from growing for ever (PRD 0015, #479).
 //!
-//! Mickey never deletes what the owner brought. What it does delete is
-//! its own leftovers: a file it was receiving that nobody resumed for a
-//! week.
+//! Mickey never deletes what the owner brought: the Bring question only
+//! says the folder is worth cleaning when it is big or the disk runs low.
+//! What Mickey does delete is its own leftovers: a file it was receiving
+//! that nobody resumed for a week.
 
+use crate::platform::space::Space;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
+/// Above this, the folder is worth a look.
+pub const BIG_FOLDER: u64 = 10_000_000_000;
+/// Below this share of the disk free, after a transfer, it is too.
+pub const LOW_FREE_PERCENT: u64 = 10;
 /// A file being received, untouched this long, was abandoned.
 pub const ABANDONED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Whether a folder holding `held` bytes is worth cleaning before
+/// `incoming` more arrive on a disk with `space`: it holds more than
+/// `BIG_FOLDER`, or less than `LOW_FREE_PERCENT` of the disk would be left.
+pub fn worth_cleaning(held: u64, incoming: u64, space: Space) -> bool {
+    let left = space.available.saturating_sub(incoming);
+    held > BIG_FOLDER || left < space.total / 100 * LOW_FREE_PERCENT
+}
+
+/// What `folder` holds, in bytes, links never followed.
+pub fn held(folder: &Path) -> u64 {
+    let Ok(read) = std::fs::read_dir(folder) else {
+        return 0;
+    };
+    read.flatten()
+        .filter_map(|entry| {
+            let metadata = std::fs::symlink_metadata(entry.path()).ok()?;
+            Some(if metadata.is_dir() {
+                held(&entry.path())
+            } else if metadata.is_file() {
+                metadata.len()
+            } else {
+                0
+            })
+        })
+        .fold(0, u64::saturating_add)
+}
 
 /// Removes the files being received under `folder` untouched for
 /// `ABANDONED` before `now`, links never followed; says how many.
@@ -49,6 +82,33 @@ fn is_part(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::test_util::Scratch;
+
+    const GB: u64 = 1_000_000_000;
+
+    #[test]
+    fn a_big_folder_or_a_low_disk_is_worth_cleaning() {
+        let roomy = Space {
+            available: 500 * GB,
+            total: 1000 * GB,
+        };
+        assert!(!worth_cleaning(GB, GB, roomy));
+        assert!(worth_cleaning(13 * GB, 0, roomy), "over 10 GB");
+        let low = Space {
+            available: 120 * GB,
+            total: 1000 * GB,
+        };
+        assert!(worth_cleaning(0, 30 * GB, low), "90 GB of 1000 left");
+        assert!(!worth_cleaning(0, 10 * GB, low), "110 GB left");
+    }
+
+    #[test]
+    fn a_folder_holds_what_is_in_it() {
+        let scratch = Scratch::new("held");
+        scratch.file("fotos/a.jpg", &[0; 100]);
+        scratch.file("fotos/2026/b.jpg", &[0; 50]);
+        scratch.file("notes.txt", &[0; 3]);
+        assert_eq!(held(&scratch.0), 153);
+    }
 
     #[test]
     fn only_files_being_received_untouched_for_a_week_are_removed() {

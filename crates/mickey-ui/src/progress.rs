@@ -203,7 +203,7 @@ fn stage_text(stage: &str) -> &'static str {
 }
 
 /// Opens `folder` in the system's file manager.
-fn open_folder(folder: &str) {
+pub fn open_folder(folder: &str) {
     let program = if cfg!(windows) {
         "explorer"
     } else {
