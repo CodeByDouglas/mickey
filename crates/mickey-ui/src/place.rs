@@ -1,6 +1,7 @@
 //! Where Mickey's small windows appear: the switcher (PRD 0007) in its
 //! corner or the center, the history in the center, the question about
-//! bringing big files (PRD 0015) in the bottom-right corner.
+//! bringing big files and the transfer's progress (PRD 0015) where
+//! `[interface] bring_position` says, the bottom-right corner by default.
 //!
 //! On Windows and X11 a program may place its own window. On Wayland only
 //! the compositor may, so Mickey asks it: on Hyprland with a window rule
@@ -24,6 +25,17 @@ pub enum Corner {
 }
 
 impl Corner {
+    /// Where the owner wants the Bring question and the transfer's
+    /// progress (`[interface] bring_position`).
+    pub fn for_transfers() -> Corner {
+        let position = mickey_config::Config::load()
+            .ok()
+            .flatten()
+            .map(|config| config.interface.bring_position)
+            .unwrap_or_default();
+        Corner::parse(&position).unwrap_or(Corner::BottomRight)
+    }
+
     pub fn parse(text: &str) -> Option<Corner> {
         Some(match text {
             "center" => Corner::Center,

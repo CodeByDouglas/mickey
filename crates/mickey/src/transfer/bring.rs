@@ -9,9 +9,10 @@ use crate::transfer::offer::{Kind, Offer};
 pub const ASK_OVER: u64 = 1 << 30;
 
 /// Asks the owner whether to bring `size` bytes of files offered by
-/// `who`: Bring or Ignore, with what they are (`mickey-ui bring`).
+/// `who`: Bring or Ignore, with what they are (`mickey-ui bring`, which
+/// shows the size as people read it).
 pub fn ask(offer: &Offer, who: &str, size: u64) -> bool {
-    let size = format!("{:.1} GB", size as f64 / 1e9);
+    let size = size.to_string();
     let answer = crate::window::ui_command(&["bring", who, &size, &top_level(offer)])
         .and_then(|mut ui| ui.status());
     matches!(answer.map(|status| status.code()), Ok(Some(0)))
