@@ -420,6 +420,7 @@ fn run_from_config() -> Result<(), String> {
                 received,
                 trusted: trusted.clone(),
                 came_from: Default::default(),
+                lanes: Default::default(),
             })
         });
     // One clipboard for the whole process (PRD 0011).

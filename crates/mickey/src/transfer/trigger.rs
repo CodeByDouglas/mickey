@@ -130,6 +130,21 @@ pub struct Transfers {
     /// Each file or folder transfers brought here, and the PC it came from:
     /// they are never sent back there (#424). As long as Mickey runs.
     pub came_from: std::sync::Mutex<Vec<(PathBuf, [u8; 32])>>,
+    /// One lane per PC files are fetched from: a transfer from a PC waits
+    /// for the one before it from that PC to end, instead of both sharing
+    /// the network and the disk.
+    pub lanes: Lanes,
+}
+
+/// A lock per PC, made on first use (PRD 0015's queue).
+#[derive(Default)]
+pub struct Lanes(std::sync::Mutex<std::collections::HashMap<[u8; 32], Arc<std::sync::Mutex<()>>>>);
+
+impl Lanes {
+    /// The lane for the PC with `key`.
+    fn of(&self, key: &[u8; 32]) -> Arc<std::sync::Mutex<()>> {
+        Arc::clone(self.0.lock_anyway().entry(*key).or_default())
+    }
 }
 
 impl Transfers {
@@ -215,6 +230,9 @@ impl Transfers {
         who: &str,
         into: &Path,
     ) -> Result<Vec<PathBuf>, String> {
+        // Waits its turn behind another transfer from the same PC.
+        let lane = self.lanes.of(&offer.key);
+        let _turn = lane.lock_anyway();
         let mut link = self.connect(offer, from)?;
         let mut fetched = Fetched::default();
         fetched.mark = crate::fs::mark::Mark::configured(who);
@@ -427,6 +445,15 @@ mod tests {
     }
 
     #[test]
+    fn transfers_from_one_pc_take_turns() {
+        let lanes = Lanes::default();
+        let (a, b) = (lanes.of(&[1; 32]), lanes.of(&[2; 32]));
+        let _turn = a.lock_anyway();
+        assert!(lanes.of(&[1; 32]).try_lock().is_err(), "the same PC waits");
+        assert!(b.try_lock().is_ok(), "another PC goes on");
+    }
+
+    #[test]
     fn the_address_falls_back_to_the_sending_pc() {
         let from: IpAddr = "192.0.2.9".parse().unwrap();
         assert_eq!(
@@ -466,6 +493,7 @@ mod tests {
             port: 1,
             received: scratch.0.join("received"),
             came_from: Default::default(),
+            lanes: Default::default(),
             trusted: trusting(&scratch.0.join("trust"), None),
         };
         // Copied, then deleted before the keyboard crossed.
@@ -486,6 +514,7 @@ mod tests {
             port: 1,
             received: scratch.0.join("received"),
             came_from: Default::default(),
+            lanes: Default::default(),
             trusted: trusting(&scratch.0.join("trust"), None),
         };
         // Refused before any connection: nothing listens at that address.
@@ -509,6 +538,62 @@ mod tests {
     }
 
     #[test]
+    fn copying_again_while_files_come_cuts_nothing_short() {
+        let scratch =
+            Scratch(std::env::temp_dir().join(format!("mickey-turns-{}", std::process::id())));
+        let from = scratch.0.join("from");
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::write(from.join("x.bin"), vec![1u8; 3_000_000]).unwrap();
+        std::fs::write(from.join("y.txt"), b"y").unwrap();
+        // PC A serves what it hands out.
+        let listen = free_input_port();
+        let a = Arc::new(Transfers {
+            offers: Arc::new(Offers::default()),
+            identity: Arc::new(Identity::generate().unwrap()),
+            port: listen.port(),
+            received: scratch.0.join("a-received"),
+            came_from: Default::default(),
+            lanes: Default::default(),
+            trusted: trusting(&scratch.0.join("a-trust"), None),
+        });
+        let offers = Arc::clone(&a.offers);
+        crate::transfer::serve::serve(
+            listen,
+            Arc::clone(&a.identity),
+            |_| true,
+            move |mut link| {
+                let _ = crate::transfer::send::serve(&mut link, |id| offers.find(id));
+            },
+        )
+        .unwrap();
+        // X is copied and crosses; then Y, before X has arrived.
+        let x = a.offer(&[from.join("x.bin")]).unwrap();
+        let y = a.offer(&[from.join("y.txt")]).unwrap();
+        let b = Arc::new(Transfers {
+            offers: Arc::new(Offers::default()),
+            identity: Arc::new(Identity::generate().unwrap()),
+            port: 1,
+            received: scratch.0.join("b-received"),
+            came_from: Default::default(),
+            lanes: Default::default(),
+            trusted: trusting(&scratch.0.join("b-trust"), Some(*a.identity.public())),
+        });
+        let fetch = |offer: FileOffer, name: &'static str| {
+            let (b, into) = (Arc::clone(&b), scratch.0.join(name));
+            std::fs::create_dir_all(&into).unwrap();
+            std::thread::spawn(move || b.fetch_shown(&offer, listen.ip(), "A", &into))
+        };
+        let (first, second) = (fetch(x, "x"), fetch(y, "y"));
+        assert!(first.join().unwrap().is_ok(), "X arrives whole");
+        assert!(second.join().unwrap().is_ok(), "and Y after it");
+        assert_eq!(
+            std::fs::read(scratch.0.join("x/x.bin")).unwrap().len(),
+            3_000_000
+        );
+        assert_eq!(std::fs::read(scratch.0.join("y/y.txt")).unwrap(), b"y");
+    }
+
+    #[test]
     fn copied_files_cross_as_an_offer_and_are_pasted_once_verified() {
         use crate::clipboard::wire::{self as clip, Wire};
         use crate::net::secure::Link;
@@ -525,6 +610,7 @@ mod tests {
             port: listen.port(),
             received: scratch.0.join("a-received"),
             came_from: Default::default(),
+            lanes: Default::default(),
             trusted: trusting(&scratch.0.join("a-trust"), None),
         });
         let offers = Arc::clone(&a.offers);
@@ -575,6 +661,7 @@ mod tests {
             port: 1,
             received: scratch.0.join("b-received"),
             came_from: Default::default(),
+            lanes: Default::default(),
             trusted: trusting(&scratch.0.join("b-trust"), Some(*a.identity.public())),
         });
         let b_keeper = Keeper::in_memory(Some(Content::Text("copied before".into())));
