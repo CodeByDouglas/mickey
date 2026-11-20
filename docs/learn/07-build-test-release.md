@@ -113,7 +113,9 @@ without publishing, so they can be tried first.
 to Program Files, runs `mickey autostart on` (a logon task, elevated only
 when the install is safe, chapter 6), allows Mickey through the firewall
 on **private** networks only, adds *Mickey settings* to the Start menu.
-`start-hidden.vbs` starts it with no console window.
+The logon task runs `mickey-ui.exe start-mickey`, a program with no
+console, which starts `mickey.exe run` without one. (Until #419 it ran a
+`start-hidden.vbs` through `wscript`, a command line Defender flagged.)
 
 For day-to-day work the owner cross-compiles the Windows build from Arch
 (`x86_64-pc-windows-gnu`) and tests it over SSH (README, *Build from

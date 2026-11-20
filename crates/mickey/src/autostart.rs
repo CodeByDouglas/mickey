@@ -134,6 +134,58 @@ pub fn system_tool(tool: &str) -> std::path::PathBuf {
     }
 }
 
+/// The logon task as Task Scheduler's XML: at the logon of `user` (a SID),
+/// in their session, run `ui` with `start-mickey`; as administrator if `highest`.
+/// Allowed on battery, never stopped for it, and with no time limit: on a
+/// laptop Mickey would otherwise never start.
+#[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
+fn task_xml(user: &str, ui: &str, highest: bool) -> String {
+    let escape = |text: &str| {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    };
+    let (user, ui) = (escape(user), escape(ui));
+    let level = if highest {
+        "HighestAvailable"
+    } else {
+        "LeastPrivilege"
+    };
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{user}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{user}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>{level}</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{ui}</Command>
+      <Arguments>start-mickey</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"#
+    )
+}
+
 #[cfg(windows)]
 mod imp {
     use super::run;
@@ -141,11 +193,6 @@ mod imp {
 
     /// The installer's task (packaging/windows/mickey.nsi).
     const TASK: &str = "Mickey";
-
-    /// A new task does not start on battery and stops when the power cable
-    /// is pulled; on a laptop, Mickey would never start. It also has no
-    /// time limit. (Same as the installer.)
-    const ON_BATTERY: &str = "Set-ScheduledTask -TaskName Mickey -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0) | Out-Null";
 
     pub fn set(on: bool) -> Result<(), String> {
         let result = if on {
@@ -170,59 +217,57 @@ mod imp {
         run(system("schtasks.exe"), &["/run", "/tn", TASK])
     }
 
-    /// At this user's logon (the account creating it), hidden, through
-    /// `start-hidden.vbs` next to this `mickey.exe` (written if missing).
-    /// As administrator, so it can drive administrator windows, but only
-    /// when nobody else can change the folder and the files that would run
-    /// that way: otherwise any program could replace them and become
-    /// administrator at the next logon. A script someone else planted is
-    /// harmless then: the task runs without administrator rights.
+    /// At this user's logon (the account creating it), hidden: the task
+    /// runs `mickey-ui.exe start-mickey`, a program with no console, which
+    /// starts `mickey.exe run` without one (#419: the `wscript` and `.vbs`
+    /// command line used before is what Defender flagged). As
+    /// administrator, so it can drive administrator windows, but only when
+    /// nobody else can change the folder and the files that would run that
+    /// way: otherwise any program could replace them and become
+    /// administrator at the next logon.
     ///
     /// The folder must also be inside Program Files: a folder only
     /// administrators may change can still be renamed away, and replaced,
     /// by whoever may change the folder it is in. Inside Program Files,
     /// nobody but administrators can.
+    ///
+    /// The task is described in an XML file, written next to `mickey.exe`
+    /// and removed after: there only administrators could swap it before
+    /// `schtasks` reads it, when the task runs as administrator.
     fn create() -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|err| err.to_string())?;
-        let script = exe.with_file_name("start-hidden.vbs");
-        if !script.exists() {
-            std::fs::write(
-                &script,
-                include_str!("../../../packaging/windows/start-hidden.vbs"),
-            )
-            .map_err(|err| format!("cannot write {}: {err}", script.display()))?;
-        }
         let dir = exe.parent().ok_or("mickey.exe has no folder")?;
         // As administrator, Mickey also needs Windows to refuse users'
         // junctions (main turned that on); a process without those rights
         // fails to make a "highest" task anyway, and asks again as one.
         let elevated = crate::platform::acl::elevated();
-        let level = if install_is_safe()
-            && (!elevated || crate::platform::acl::user_junctions_refused())
-        {
-            "highest"
-        } else {
+        let highest =
+            install_is_safe() && (!elevated || crate::platform::acl::user_junctions_refused());
+        if !highest {
             eprintln!(
                 "mickey: {} is not inside Program Files or can be changed by any user, so Mickey will start without administrator rights (it cannot drive administrator windows); install it with the installer",
                 dir.display()
             );
-            "limited"
-        };
-        let action = format!(
-            "{} \"{}\"",
-            system("wscript.exe").display(),
-            script.display()
-        );
-        run(
+        }
+        let user = crate::platform::acl::user_sid()
+            .map_err(|err| format!("cannot tell which user the task is for: {err}"))?;
+        let ui = exe.with_file_name("mickey-ui.exe");
+        let xml = super::task_xml(&user, &ui.display().to_string(), highest);
+        let file = exe.with_file_name("mickey-task.xml");
+        // schtasks reads UTF-16, with its byte order mark.
+        let bytes: Vec<u8> = std::iter::once(0xFEFF)
+            .chain(xml.encode_utf16())
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        std::fs::write(&file, bytes)
+            .map_err(|err| format!("cannot write {}: {err}", file.display()))?;
+        let path = file.display().to_string();
+        let made = run(
             system("schtasks.exe"),
-            &[
-                "/create", "/tn", TASK, "/tr", &action, "/sc", "onlogon", "/it", "/rl", level, "/f",
-            ],
-        )?;
-        run(
-            system("powershell.exe"),
-            &["-NoProfile", "-Command", ON_BATTERY],
-        )
+            &["/create", "/tn", TASK, "/xml", &path, "/f"],
+        );
+        let _ = std::fs::remove_file(&file);
+        made
     }
 
     /// Whether only administrators can change this Mickey: its folder is
@@ -237,10 +282,9 @@ mod imp {
         let Some(dir) = exe.parent() else {
             return false;
         };
-        let script = exe.with_file_name("start-hidden.vbs");
         let ui = exe.with_file_name("mickey-ui.exe");
         in_program_files(dir)
-            && [dir, exe.as_path(), script.as_path(), ui.as_path()]
+            && [dir, exe.as_path(), ui.as_path()]
                 .iter()
                 .filter(|path| path.exists())
                 .all(|path| crate::platform::acl::admin_only(path).unwrap_or(false))
@@ -292,5 +336,35 @@ mod imp {
             // `..` is resolved before comparing.
             assert!(!super::in_program_files(&root.join("..\\Users")));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_logon_task_runs_the_starter_with_no_script() {
+        let xml = task_xml(
+            "S-1-5-21-1-2-3-1001",
+            "C:\\Program Files\\Mickey\\mickey-ui.exe",
+            true,
+        );
+        assert!(xml.contains("<Command>C:\\Program Files\\Mickey\\mickey-ui.exe</Command>"));
+        assert!(xml.contains("<Arguments>start-mickey</Arguments>"));
+        assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
+        assert!(xml.contains("<UserId>S-1-5-21-1-2-3-1001</UserId>"));
+        assert!(xml.contains("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>"));
+        assert!(!xml.contains("wscript") && !xml.contains(".vbs"));
+        let limited = task_xml("ana", "C:\\M\\mickey-ui.exe", false);
+        assert!(limited.contains("<RunLevel>LeastPrivilege</RunLevel>"));
+    }
+
+    #[test]
+    fn a_name_cannot_add_to_the_task() {
+        let xml = task_xml("ana</UserId><RunLevel>x", "C:\\a&b\\mickey-ui.exe", false);
+        assert!(xml.contains("ana&lt;/UserId&gt;&lt;RunLevel&gt;x"));
+        assert!(xml.contains("C:\\a&amp;b\\mickey-ui.exe"));
+        assert_eq!(xml.matches("<RunLevel>").count(), 1);
     }
 }

@@ -65,12 +65,12 @@ mod tests {
     #[test]
     fn a_file_from_another_pc_says_where_from() {
         let local = Mark {
-            from: "DESKTOP-LV39GUR".into(),
+            from: "DESK-01".into(),
             internet: false,
         };
         assert_eq!(
             local.text(),
-            "[ZoneTransfer]\r\nZoneId=1\r\nHostUrl=mickey://DESKTOP-LV39GUR\r\n"
+            "[ZoneTransfer]\r\nZoneId=1\r\nHostUrl=mickey://DESK-01\r\n"
         );
         let internet = Mark {
             from: "Notebook da Ana\r\nZoneId=0".into(),
