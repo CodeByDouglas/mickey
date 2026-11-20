@@ -23,6 +23,9 @@ only: no arrows or emoji, which Mickey's font may not have.
   TCP 4244.
 - What you copied arrives on the other PC faster: each crossing no longer
   waits about a tenth of a second for the network.
+- A copied image is no longer sent again every time the keyboard goes
+  back and forth, only when something new is copied, so it arrives more
+  reliably. Thanks to @wendelmax, who found it.
 
 ## 0.5.0
 
