@@ -38,26 +38,6 @@ impl fmt::Debug for Content {
     }
 }
 
-impl Content {
-    /// A short stand-in for a text or an image, the same for the same
-    /// content, so two PCs can tell they already share it without sending
-    /// it again (#424). Files have none: the same paths can hold new bytes.
-    pub fn fingerprint(&self) -> Option<u64> {
-        use std::hash::{DefaultHasher, Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        match self {
-            Content::Text(text) => ("text", text).hash(&mut hasher),
-            Content::Image {
-                width,
-                height,
-                rgba,
-            } => ("image", width, height, rgba).hash(&mut hasher),
-            Content::Files(_) => return None,
-        }
-        Some(hasher.finish())
-    }
-}
-
 /// While this lives, it can read and write the clipboard. On Wayland and
 /// X11 what we write stays available only while this lives: the clipboard
 /// asks its owner for the data when someone pastes.

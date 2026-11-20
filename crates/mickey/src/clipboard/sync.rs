@@ -33,9 +33,6 @@ pub fn answer(
     still_trusted: impl Fn() -> bool,
     transfers: Option<(&Arc<Transfers>, &Keeper)>,
 ) -> io::Result<()> {
-    // What this PC and the source last exchanged: asked again for the same,
-    // this PC answers `Nothing` instead of sending it back (#424).
-    let mut shared: Option<u64> = None;
     loop {
         let bytes = link.recv_bulk()?;
         // Forgotten while connected: nothing more from it.
@@ -54,17 +51,16 @@ pub fn answer(
         }
         let message = wire::decode(&bytes).map_err(io::Error::other)?;
         match message {
-            Wire::Ask | Wire::AskOffer => {
-                let wants_offer = message == Wire::AskOffer;
-                let content = read().filter(|content| !already(shared, content));
-                let reply = match (content, transfers) {
-                    (Some(Content::Files(paths)), Some((transfers, _))) if wants_offer => {
+            Wire::Ask => {
+                let reply = read().map_or(Wire::Nothing, Wire::Content);
+                link.send_bulk(&encode_or_nothing(&reply))?;
+            }
+            Wire::AskOffer => {
+                let reply = match (read(), transfers) {
+                    (Some(Content::Files(paths)), Some((transfers, _))) => {
                         offer_or_files(transfers, paths).into()
                     }
-                    (content, _) => content.map_or(Wire::Nothing, |content| {
-                        shared = content.fingerprint();
-                        Wire::Content(content)
-                    }),
+                    (content, _) => content.map_or(Wire::Nothing, Wire::Content),
                 };
                 link.send_bulk(&encode_or_nothing(&reply))?;
             }
@@ -72,10 +68,7 @@ pub fn answer(
             // brings its clipboard along; files are not even saved
             // otherwise. A refusal logs who sent it, never what.
             Wire::Content(content) => match may_write() {
-                Ok(()) => {
-                    shared = content.fingerprint();
-                    write(content);
-                }
+                Ok(()) => write(content),
                 Err(who) => eprintln!(
                     "mickey: a clipboard from {who}, a PC not in control here, was refused"
                 ),
@@ -109,12 +102,6 @@ pub fn answer(
             Wire::Nothing => {}
         }
     }
-}
-
-/// Whether `content` is what two PCs last exchanged (`shared`), so the
-/// other one already has it.
-fn already(shared: Option<u64>, content: &Content) -> bool {
-    shared.is_some() && content.fingerprint() == shared
 }
 
 /// Copied `paths` as an offer from this PC; or why not (too many, or gone),
@@ -345,9 +332,6 @@ impl DataLinks {
             // The peers whose Mickey knows file transfers (PRD 0015): only
             // they are ever sent an offer (#478).
             let mut knows: HashSet<usize> = HashSet::new();
-            // What this PC and each peer last exchanged (#424): never
-            // sent to it again, as it has it.
-            let mut shared: HashMap<usize, u64> = HashMap::new();
             for job in todo {
                 match job {
                     Job::Link(peer, mut link, knows_transfers) => {
@@ -372,9 +356,6 @@ impl DataLinks {
                             } else {
                                 knows.remove(&peer);
                             }
-                            // A new link starts knowing nothing: the peer
-                            // may have restarted with another clipboard.
-                            shared.remove(&peer);
                             links.insert(peer, link);
                         }
                     }
@@ -407,11 +388,7 @@ impl DataLinks {
                         // refuses it (#436). The newer crossing carries.
                         let current = || latest.load(Ordering::SeqCst) == crossing;
                         if current() {
-                            let peers = Peers {
-                                links: &mut links,
-                                shared: &mut shared,
-                            };
-                            carry(&keeper, peers, takers, (from, to), current);
+                            carry(&keeper, &mut links, takers, (from, to), current);
                         }
                     }
                 }
@@ -484,13 +461,6 @@ impl DataLinks {
     }
 }
 
-/// The source's open data links, and what it last exchanged with each
-/// peer through them.
-struct Peers<'a> {
-    links: &'a mut HashMap<usize, Link>,
-    shared: &'a mut HashMap<usize, u64>,
-}
-
 /// Which PCs take copied files as an offer: this one if it has
 /// `transfers`, a peer if it also said it knows them.
 #[derive(Clone, Copy)]
@@ -531,7 +501,7 @@ impl From<Carried> for Wire {
 /// moved again.
 fn carry(
     keeper: &Keeper,
-    Peers { links, shared }: Peers,
+    links: &mut HashMap<usize, Link>,
     takers: OfferTakers,
     (from, to): (Option<usize>, Option<usize>),
     current: impl Fn() -> bool,
@@ -560,12 +530,7 @@ fn carry(
                 Ok::<_, io::Error>((answer, link.peer_ip()?, *link.peer_key()))
             });
             match asked {
-                Some(Ok((Wire::Content(content), _, _))) => {
-                    if let Some(fingerprint) = content.fingerprint() {
-                        shared.insert(peer, fingerprint);
-                    }
-                    Some(Carried::Content(content))
-                }
+                Some(Ok((Wire::Content(content), _, _))) => Some(Carried::Content(content)),
                 Some(Ok((Wire::Files(files), _, _))) => {
                     save(files).map(|paths| Carried::Content(Content::Files(paths)))
                 }
@@ -603,19 +568,10 @@ fn carry(
                 transfers.fetch(offer, ip, keeper.clone());
             }
         }
-        // The peer has it already: it was sent there, or came from there.
-        (Some(peer), Carried::Content(content))
-            if already(shared.get(&peer).copied(), &content) => {}
         (Some(peer), carried) => {
             let Some(link) = links.get_mut(&peer) else {
                 return;
             };
-            if let Carried::Content(content) = &carried {
-                match content.fingerprint() {
-                    Some(fingerprint) => shared.insert(peer, fingerprint),
-                    None => shared.remove(&peer),
-                };
-            }
             let kind = match &carried {
                 Carried::Content(content) => format!("{content:?}"),
                 Carried::Offer(_) => "an offer".to_string(),
@@ -831,7 +787,6 @@ mod tests {
         let stream = TcpStream::connect(addr).unwrap();
         let link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
         let mut links = HashMap::from([(0, link)]);
-        let mut shared = HashMap::new();
         let keeper = Keeper::in_memory(Some(Content::Text("copied before".into())));
         let knows = HashSet::new();
         let takers = OfferTakers {
@@ -839,123 +794,14 @@ mod tests {
             knows: &knows,
         };
         // The keyboard already left peer 0: nothing goes.
-        carry(
-            &keeper,
-            Peers {
-                links: &mut links,
-                shared: &mut shared,
-            },
-            takers,
-            (None, Some(0)),
-            || false,
-        );
+        carry(&keeper, &mut links, takers, (None, Some(0)), || false);
         // It came back and stays, with something new copied: that goes.
         keeper.write(Content::Text("copied here".into()));
-        carry(
-            &keeper,
-            Peers {
-                links: &mut links,
-                shared: &mut shared,
-            },
-            takers,
-            (None, Some(0)),
-            || true,
-        );
+        carry(&keeper, &mut links, takers, (None, Some(0)), || true);
         assert_eq!(
             target.join().unwrap(),
             Wire::Content(Content::Text("copied here".into())),
             "the first message the target gets is the current crossing's"
         );
-    }
-
-    /// The scenario of #424 (found by @wendelmax): copy on A, move the
-    /// keyboard to B, back to A and to B again, copying nothing new.
-    #[test]
-    fn the_same_clipboard_is_not_sent_again_to_the_same_peer() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        // What reached B's clipboard, in order; B's clipboard is the last.
-        let written = Arc::new(Mutex::new(Vec::new()));
-        let b_written = Arc::clone(&written);
-        let b = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
-            let read_back = Arc::clone(&b_written);
-            let _ = answer(
-                link,
-                move || read_back.lock().unwrap().last().cloned(),
-                || Ok(()),
-                |content| b_written.lock().unwrap().push(content),
-                |_, _| {},
-                || true,
-                None,
-            );
-        });
-        let stream = TcpStream::connect(addr).unwrap();
-        let link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
-        let mut links = HashMap::from([(0, link)]);
-        let mut shared = HashMap::new();
-        let keeper = Keeper::in_memory(Some(Content::Text("copied on A".into())));
-        let knows = HashSet::new();
-        let takers = OfferTakers {
-            transfers: None,
-            knows: &knows,
-        };
-        let mut cross = |from, to| {
-            let peers = Peers {
-                links: &mut links,
-                shared: &mut shared,
-            };
-            carry(&keeper, peers, takers, (from, to), || true);
-        };
-        cross(None, Some(0));
-        cross(Some(0), None);
-        cross(None, Some(0));
-        keeper.write(Content::Text("copied on A again".into()));
-        cross(None, Some(0));
-        drop(cross);
-        drop(links);
-        b.join().unwrap();
-        assert_eq!(
-            *written.lock().unwrap(),
-            [
-                Content::Text("copied on A".into()),
-                Content::Text("copied on A again".into()),
-            ],
-            "once each: B already had it on the second crossing"
-        );
-        assert_eq!(
-            keeper.read(),
-            Some(Content::Text("copied on A again".into()))
-        );
-    }
-
-    #[test]
-    fn asked_for_what_it_was_just_sent_a_target_answers_nothing() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let target = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
-            let held = Mutex::new(None);
-            let _ = answer(
-                link,
-                || held.lock().unwrap().clone(),
-                || Ok(()),
-                |content| *held.lock().unwrap() = Some(content),
-                |_, _| {},
-                || true,
-                None,
-            );
-        });
-        let stream = TcpStream::connect(addr).unwrap();
-        let mut link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
-        let mut send = |wire: Wire| link.send_bulk(&wire::encode(&wire).unwrap()).unwrap();
-        send(Wire::Content(Content::Text("same".into())));
-        send(Wire::Ask);
-        let reply = wire::decode(&link.recv_bulk().unwrap()).unwrap();
-        assert_eq!(reply, Wire::Nothing, "the source has it");
-        drop(link);
-        target.join().unwrap();
     }
 }
