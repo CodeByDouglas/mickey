@@ -32,6 +32,22 @@ pub fn safe_name(name: &str) -> Option<&str> {
     (!bad).then_some(name)
 }
 
+/// `name` as it can be shown in a window: characters that do not show,
+/// or change how the rest reads, become `?`, and it is cut at 200
+/// characters. For names that may not be safe (from another PC).
+pub fn shown(name: &str) -> String {
+    name.chars()
+        .take(200)
+        .map(|c| {
+            if c.is_control() || hides_text(c) {
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// Characters that change how a name reads without showing: direction
 /// marks and overrides, which make `photo\u{202E}gpj.exe` show as
 /// `photoexe.jpg`, and zero-width ones.
@@ -45,6 +61,13 @@ fn hides_text(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_is_shown_without_what_hides_text() {
+        assert_eq!(shown("photo\u{202E}gpj.exe"), "photo?gpj.exe");
+        assert_eq!(shown("a\tb\nc"), "a?b?c");
+        assert_eq!(shown(&"x".repeat(500)).len(), 200);
+    }
 
     #[test]
     fn only_plain_names_are_safe() {
