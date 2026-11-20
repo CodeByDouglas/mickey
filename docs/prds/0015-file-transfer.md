@@ -307,8 +307,9 @@ own files:
 ## Credits
 
 Paste on demand and announcing before sending came from @wendelmax in
-#425, and the failing test for resent content in #424. Commits that use
-them carry `Co-authored-by`.
+#425: an offer announces the files, and pasting fetches them. The scenario
+and the fix for resent content are also his, from #424 (#511). Each is
+credited in the pull request that uses it, and in the changelog.
 
 ## Discoveries
 
