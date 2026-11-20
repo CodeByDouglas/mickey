@@ -11,6 +11,8 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
+- On Windows, Mickey starts at logon without a script: the way it was
+  started is what Windows Defender mistook for malware on new installs.
 - On Windows, files from your other PCs no longer make SmartScreen or
   Office warn: they are marked as from your local network, and say which
   PC they came from. Settings > General can bring the warnings back.
