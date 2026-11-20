@@ -284,6 +284,7 @@ ignore = "Ignore"
 size = "{size}, to Downloads/Mickey"
 keep = "Leave them as they are on {name} until they arrive."
 window_title = "Mickey: bring files"
+worth_cleaning = "Downloads/Mickey already holds {size}: worth a clean first?"
 
 [progress]
 window_title = "Mickey: files arriving"

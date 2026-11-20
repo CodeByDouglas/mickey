@@ -228,14 +228,14 @@ impl Transfers {
             let waiting = self.fetches.waiting();
             return crate::clipboard::received::new_folder(&self.received, &waiting).map(Some);
         }
-        if !bring::ask(&offer.offer, who, size) {
+        let folder = crate::fs::downloads::mickey_folder()?;
+        if !bring::ask(&offer.offer, who, size, &folder) {
             println!(
                 "mickey: {:.1} GB of files offered, not brought",
                 size as f64 / 1e9
             );
             return Ok(None);
         }
-        let folder = crate::fs::downloads::mickey_folder()?;
         // Only Mickey's own leftovers go, never what the owner brought.
         crate::transfer::cleanup::remove_abandoned(&folder, std::time::SystemTime::now());
         Ok(Some(folder))

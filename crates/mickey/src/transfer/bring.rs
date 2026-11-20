@@ -2,7 +2,9 @@
 //! owner says Bring (to `Downloads/Mickey`) or Ignore, seeing what the
 //! files are (`mickey-ui bring`).
 
+use crate::transfer::cleanup;
 use crate::transfer::offer::{Kind, Offer};
+use std::path::Path;
 
 /// Above this many bytes, a transfer is asked about first: Bring (to
 /// `Downloads/Mickey`) or Ignore. The owner sets it (`[interface]
@@ -17,11 +19,21 @@ pub fn ask_over() -> u64 {
 }
 
 /// Asks the owner whether to bring `size` bytes of files offered by
-/// `who`: Bring or Ignore, with what they are (`mickey-ui bring`, which
-/// shows the size as people read it).
-pub fn ask(offer: &Offer, who: &str, size: u64) -> bool {
-    let size = size.to_string();
-    let answer = crate::window::ui_command(&["bring", who, &size, &top_level(offer)])
+/// `who` into `folder`: Bring or Ignore, with what they are (`mickey-ui
+/// bring`, which shows the size as people read it). When `folder` is
+/// worth cleaning first, the window says how much it holds.
+pub fn ask(offer: &Offer, who: &str, size: u64, folder: &Path) -> bool {
+    let held = cleanup::held(folder);
+    let worth = crate::platform::space::of(folder)
+        .is_ok_and(|space| cleanup::worth_cleaning(held, size, space));
+    let held = if worth { held } else { 0 };
+    let (size, held, folder) = (
+        size.to_string(),
+        held.to_string(),
+        folder.display().to_string(),
+    );
+    let what = top_level(offer);
+    let answer = crate::window::ui_command(&["bring", who, &size, &what, &held, &folder])
         .and_then(|mut ui| ui.status());
     matches!(answer.map(|status| status.code()), Ok(Some(0)))
 }

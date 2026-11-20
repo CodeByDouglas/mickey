@@ -263,11 +263,17 @@ fn main() -> ExitCode {
     {
         return progress::window(who);
     }
-    if let [command, who, bytes, what] = args.as_slice()
+    if let [command, who, bytes, what, held, folder] = args.as_slice()
         && command == "bring"
-        && let Ok(bytes) = bytes.parse()
+        && let (Ok(bytes), Ok(held)) = (bytes.parse(), held.parse::<u64>())
     {
-        return bring::window(who, bytes, what);
+        return bring::window(bring::Asked {
+            who: who.clone(),
+            bytes,
+            what: what.clone(),
+            held: (held > 0).then_some(held),
+            folder: folder.clone(),
+        });
     }
     // `switcher --mirror …`: the copy for the PCs not in use.
     let mirror = args.iter().any(|arg| arg == "--mirror");
