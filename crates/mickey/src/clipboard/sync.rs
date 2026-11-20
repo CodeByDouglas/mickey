@@ -368,11 +368,11 @@ impl DataLinks {
                         audio = Some(bytes);
                     }
                     Job::Moved { from, to } => {
-                        let offers = Offers {
+                        let takers = OfferTakers {
                             transfers: transfers.as_ref(),
                             knows: &knows,
                         };
-                        carry(&keeper, &mut links, offers, from, to);
+                        carry(&keeper, &mut links, takers, from, to);
                     }
                 }
             }
@@ -446,13 +446,13 @@ impl DataLinks {
 /// Which PCs take copied files as an offer: this one if it has
 /// `transfers`, a peer if it also said it knows them.
 #[derive(Clone, Copy)]
-struct Offers<'a> {
+struct OfferTakers<'a> {
     transfers: Option<&'a Arc<Transfers>>,
     knows: &'a HashSet<usize>,
 }
 
-impl Offers<'_> {
-    fn take(&self, peer: Option<usize>) -> bool {
+impl OfferTakers<'_> {
+    fn takes(&self, peer: Option<usize>) -> bool {
         self.transfers.is_some() && peer.is_none_or(|peer| self.knows.contains(&peer))
     }
 }
@@ -481,16 +481,16 @@ impl From<Carried> for Wire {
 fn carry(
     keeper: &Keeper,
     links: &mut HashMap<usize, Link>,
-    offers: Offers,
+    takers: OfferTakers,
     from: Option<usize>,
     to: Option<usize>,
 ) {
     let started = Instant::now();
-    let both_take_offers = offers.take(from) && offers.take(to);
+    let both_take_offers = takers.takes(from) && takers.takes(to);
     let carried = match from {
         None => keeper
             .read()
-            .map(|content| match (content, offers.transfers) {
+            .map(|content| match (content, takers.transfers) {
                 // This PC's own files, to a peer that takes an offer.
                 (Content::Files(paths), Some(transfers)) if both_take_offers && to.is_some() => {
                     offer_or_files(transfers, paths)
@@ -538,7 +538,7 @@ fn carry(
         (None, Carried::Content(content)) => keeper.write(content),
         (None, Carried::NotOffered(why)) => crate::transfer::show::failed("", &why),
         (None, Carried::Offer(offer)) => {
-            if let Some(transfers) = offers.transfers
+            if let Some(transfers) = takers.transfers
                 && let Some(ip) = offer.ip
             {
                 transfers.fetch(offer, ip, keeper.clone());

@@ -6,11 +6,9 @@
 //! index, never by a path, so it can never ask for a file that was not
 //! copied.
 
-// Sending and receiving (#474) and the clipboard trigger (#478) use this.
-#![cfg_attr(not(test), expect(dead_code, reason = "used from #474 on"))]
-
 pub mod cleanup;
 pub mod hash;
+pub mod listen;
 pub mod offer;
 pub mod offers;
 pub mod path;
@@ -18,7 +16,6 @@ pub mod progress;
 pub mod receive;
 pub mod room;
 pub mod send;
-pub mod serve;
 pub mod show;
 pub mod trigger;
 pub mod wire;

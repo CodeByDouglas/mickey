@@ -20,7 +20,10 @@ use std::time::SystemTime;
 /// ends. Each fetch names its offer, which `find` turns into the listing
 /// it was made from; an offer `find` does not know (never handed out, or
 /// no longer current) ends the connection.
-pub fn serve(link: &mut Link, find: impl Fn(u64) -> Option<Arc<Listing>>) -> io::Result<()> {
+pub fn answer_fetches(
+    link: &mut Link,
+    find: impl Fn(u64) -> Option<Arc<Listing>>,
+) -> io::Result<()> {
     loop {
         let bytes = match link.recv_bulk() {
             Ok(bytes) => bytes,

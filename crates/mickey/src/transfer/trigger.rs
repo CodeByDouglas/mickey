@@ -217,12 +217,13 @@ impl Lanes {
 }
 
 impl Transfers {
-    /// An offer of the files at `paths`, handed out by this PC, in place of
-    /// the one before. The IP is left out: the receiving PC knows it.
+    /// An offer of the files at `paths`, handed out by this PC (the last
+    /// few stay fetchable). The IP is left out: the
+    /// receiving PC knows it.
     pub fn offer(&self, paths: &[PathBuf]) -> Result<FileOffer, String> {
         let listing = offer::list(paths)?;
         // Nothing left to offer (the copied files were deleted or moved):
-        // the clipboard then carries what it can, as before.
+        // the other PC is told why.
         if listing.entries.is_empty() {
             return Err("none of the copied files is there any more".into());
         }
@@ -681,12 +682,12 @@ mod tests {
             trusted: trusting(&scratch.0.join("a-trust"), None),
         });
         let offers = Arc::clone(&a.offers);
-        crate::transfer::serve::serve(
+        crate::transfer::listen::listen(
             listen,
             Arc::clone(&a.identity),
             |_| true,
             move |mut link| {
-                let _ = crate::transfer::send::serve(&mut link, |id| offers.find(id));
+                let _ = crate::transfer::send::answer_fetches(&mut link, |id| offers.find(id));
             },
         )
         .unwrap();
@@ -742,12 +743,12 @@ mod tests {
             trusted: trusting(&scratch.0.join("a-trust"), None),
         });
         let offers = Arc::clone(&a.offers);
-        crate::transfer::serve::serve(
+        crate::transfer::listen::listen(
             listen,
             Arc::clone(&a.identity),
             |_| true,
             move |mut link| {
-                let _ = crate::transfer::send::serve(&mut link, |id| offers.find(id));
+                let _ = crate::transfer::send::answer_fetches(&mut link, |id| offers.find(id));
             },
         )
         .unwrap();
