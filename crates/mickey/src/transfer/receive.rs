@@ -60,6 +60,16 @@ pub struct Fetched {
     pub mark: Mark,
 }
 
+impl Fetched {
+    /// A transfer not started yet, whose files will carry `mark`.
+    pub fn marked(mark: Mark) -> Fetched {
+        Fetched {
+            mark,
+            ..Default::default()
+        }
+    }
+}
+
 /// Fetches every file of `offer` into the folder `into`, or what is left of
 /// it if `fetched` comes from an attempt that broke. A copied file or
 /// folder whose name is taken there gets `name (2)`, never overwriting.

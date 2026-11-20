@@ -155,7 +155,7 @@ fn clipboard() {
             ("b".into(), vec![]),
         ]),
         Wire::AskOffer,
-        Wire::Offer(crate::transfer::trigger::FileOffer {
+        Wire::Offer(crate::transfer::file_offer::FileOffer {
             ip: Some("192.0.2.7".parse().unwrap()),
             port: 4242,
             key: [3; 32],
