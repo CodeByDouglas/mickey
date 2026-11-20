@@ -1,11 +1,10 @@
-//! A log file for Mickey on Windows. Started at logon by `start-hidden.vbs`,
-//! it has no console, so everything it prints was lost: a problem could not
-//! be looked into (#287). On Linux the systemd journal keeps it
-//! (`journalctl --user -u mickey`).
+//! A log file for Mickey on Windows. Started at logon by `mickey-ui.exe
+//! start-mickey`, it has no console, so everything it prints was lost: a
+//! problem could not be looked into (#287). On Linux the systemd journal
+//! keeps it (`journalctl --user -u mickey`).
 //!
-//! With no console anyone can see (none, or the hidden one `start-hidden.vbs`
-//! gets: window style 0 still makes a console, only invisible), Mickey
-//! points its standard output and error at
+//! With no console anyone can see (none, as `start-mickey` starts it, or a
+//! hidden one), Mickey points its standard output and error at
 //! `%LOCALAPPDATA%\mickey\mickey.log`; the previous run's stays as
 //! `mickey.log.old`. Rust's `println!` asks Windows for the standard handle
 //! on every write, so it follows. The log holds what Mickey prints, never a

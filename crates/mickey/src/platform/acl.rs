@@ -171,6 +171,47 @@ pub fn elevated() -> bool {
     ok && elevation != 0
 }
 
+/// TOKEN_INFORMATION_CLASS's TokenUser: a TOKEN_USER, whose first field
+/// points to the user's SID, inside the same buffer.
+const TOKEN_USER: u32 = 1;
+
+/// The SID of the user this process runs as, as text ("S-1-5-21-…"): how
+/// Task Scheduler names an account whatever its domain says (over SSH,
+/// `USERDOMAIN` reads `WORKGROUP`, which no account matches).
+pub fn user_sid() -> io::Result<String> {
+    let mut token = std::ptr::null_mut();
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no
+    // closing; `token` is a valid out-pointer.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut needed = 0u32;
+    // SAFETY: `token` was just opened with TOKEN_QUERY; a null buffer of
+    // length 0 only asks for the size it needs, written to `needed`.
+    unsafe { GetTokenInformation(token, TOKEN_USER, std::ptr::null_mut(), 0, &mut needed) };
+    // u64s, so the pointer at its start is aligned.
+    let mut buffer = vec![0u64; (needed as usize).div_ceil(8)];
+    // SAFETY: `buffer` holds at least `needed` bytes, the length given.
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TOKEN_USER,
+            buffer.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        )
+    } != 0;
+    // SAFETY: `token` was opened above and is closed once.
+    unsafe { CloseHandle(token) };
+    if !ok {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: on success the buffer starts with a TOKEN_USER, whose first
+    // field is the pointer to the SID, which lives inside `buffer`.
+    let sid = unsafe { *buffer.as_ptr().cast::<*mut c_void>() };
+    sid_string(sid)
+}
+
 #[repr(C)]
 struct Guid {
     data1: u32,
@@ -314,7 +355,8 @@ fn judge(owner: *mut c_void, dacl: *mut Acl) -> io::Result<bool> {
 /// A SID as text ("S-1-5-32-544").
 fn sid_string(sid: *mut c_void) -> io::Result<String> {
     let mut text = std::ptr::null_mut();
-    // SAFETY: `sid` points to a SID inside the live descriptor; on success
+    // SAFETY: `sid` points to a SID inside a live buffer (a security
+    // descriptor, or a token's user); on success
     // Windows allocates `text` (freed below with LocalFree).
     if unsafe { ConvertSidToStringSidW(sid, &mut text) } == 0 {
         return Err(io::Error::last_os_error());

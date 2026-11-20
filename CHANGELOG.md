@@ -11,6 +11,8 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
+- On Windows, Mickey starts at logon without a script: the way it was
+  started is what Windows Defender mistook for malware on new installs.
 - Pairing with a PC whose pairing is closed, or that says no, no longer
   leaves a code on one screen only: the code closes at once and a window
   says why and what to do.
