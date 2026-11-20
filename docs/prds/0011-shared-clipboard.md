@@ -122,3 +122,17 @@ recent copies.
   from another PC's keyboard. Turning it off deletes the received-files
   folder and the whole in-memory history, which cannot tell received
   copies from local ones. It applies when the settings window saves.
+- **Only with a hotkey** (2026-11-20, #437): `[clipboard] share =
+  "hotkey"` leaves the clipboard where it is when the keyboard moves.
+  **AltGr + Right Shift + C** (`[hotkeys] clipboard`) brings the clipboard
+  of the PC the keyboard just left, however it moved, by an edge or a
+  hotkey. It works in "auto" too, and never when sharing is off.
+  - Copied on the PC with the keyboard, it comes at any time.
+  - Copied on another PC, that PC still answers only within 5 seconds of
+    the keyboard leaving it (#185). Allowing longer would let a paired PC
+    read another's clipboard whenever it likes, and the PC asked cannot
+    tell whether the owner pressed anything.
+  - The hotkey is this PC's own, like `share`: it is never sent with the
+    shared hotkeys, which an older Mickey would refuse. Its default is
+    skipped where a config.toml already gives those keys to something
+    else.

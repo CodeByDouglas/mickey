@@ -11,6 +11,9 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
+- The clipboard can follow the keyboard only when you ask: choose "Only
+  when I press AltGr + Right Shift + C" in Settings > General, then press
+  it on the PC you went to, to bring what you copied on the one you left.
 - On Windows, files from your other PCs no longer make SmartScreen or
   Office warn: they are marked as from your local network, and say which
   PC they came from. Settings > General can bring the warnings back.

@@ -152,6 +152,7 @@ impl Settings {
         ui.label(i18n::t("general.share_label"));
         for (choice, text) in [
             (Share::Auto, i18n::t("general.share_auto")),
+            (Share::Hotkey, i18n::t("general.share_hotkey")),
             (Share::Off, i18n::t("general.share_off")),
         ] {
             ui.radio_value(&mut form.share, choice, text);

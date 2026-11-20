@@ -251,8 +251,15 @@ impl Form {
                 out += "history = false    # another clipboard manager keeps the history\n"
             }
         }
-        if self.share == Share::Off {
-            out += "share = \"off\"    # the clipboard never follows this PC's keyboard\n";
+        match self.share {
+            Share::Auto => {}
+            Share::Off => {
+                out += "share = \"off\"    # the clipboard never follows this PC's keyboard\n"
+            }
+            Share::Hotkey => {
+                out +=
+                    "share = \"hotkey\"    # only with AltGr+RightShift+C ([hotkeys] clipboard)\n"
+            }
         }
         if self.warn_received {
             out += "warn_received = true    # Windows: files from other PCs marked as from the Internet\n";
