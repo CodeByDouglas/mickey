@@ -1,6 +1,6 @@
 # 0015 — Big files and folders
 
-> Status: **draft** · Depends on: [0002](0002-secure-link.md), [0011](0011-shared-clipboard.md) · Vision: [0000](0000-vision.md) · Issue: #431
+> Status: **in progress** (works end to end; gaps in #502) · Depends on: [0002](0002-secure-link.md), [0011](0011-shared-clipboard.md) · Vision: [0000](0000-vision.md) · Issue: #431
 
 ## Goals
 
@@ -273,19 +273,19 @@ own files:
 
 ## Requirements
 
-- [ ] Folders and files of any size and count cross with copy and paste.
-- [ ] Bring / Ignore above a configurable threshold (1 GB).
-- [ ] Automatic fetches in the cache; brought ones in `Downloads/Mickey`.
-- [ ] Free space checked before and during; the disk never fills.
-- [ ] Every file verified with BLAKE3; summary with counts and skips.
-- [ ] Resume at the exact byte.
-- [ ] Changed and deleted source files handled and reported.
-- [ ] Links never followed; unsafe names skipped and listed.
-- [ ] Progress window with real stages, a queue, Cancel, minimizable.
-- [ ] The clipboard keeps working during a transfer.
-- [ ] Mark of the Web from Mickey, Local intranet by default, configurable.
-- [ ] Cleaning suggestion; abandoned `.part` removed after 7 days.
-- [ ] Older Mickey versions fall back to today's path.
+- [x] Folders and files of any size cross with copy and paste (at most 100 000 entries per copy).
+- [ ] Bring / Ignore above a configurable threshold. *(Bring / Ignore works over 1 GB, and where it appears is configurable; the 1 GB itself is not yet, #502.)*
+- [x] Automatic fetches in the cache; brought ones in `Downloads/Mickey`.
+- [x] Free space checked before and during; the disk never fills.
+- [ ] Every file verified with BLAKE3; summary with counts and skips. *(Verified, and the window shows counts; skipped files are only counted in the log, #502.)*
+- [ ] Resume at the exact byte. *(Built and tested in `receive`, #475; the trigger starts every fetch afresh, so it is not used yet, #502.)*
+- [ ] Changed and deleted source files handled and reported. *(Handled: skipped, never sent half right; not shown to the owner yet, #502.)*
+- [x] Links never followed; unsafe names skipped. *(Listing them to the owner: #502.)*
+- [ ] Progress window with real stages, a queue, Cancel, minimizable. *(Stages, Cancel and the queue work; a queued transfer shows nothing while it waits, and the window is not minimizable, #502.)*
+- [x] The clipboard keeps working during a transfer.
+- [x] Mark of the Web from Mickey, Local intranet by default, configurable.
+- [ ] Cleaning suggestion; abandoned `.part` removed after 7 days. *(Removed after 7 days; the suggestion's logic exists, #479, but nothing shows it yet, #502.)*
+- [x] Older Mickey versions fall back to today's path.
 
 ## Non-Goals
 
@@ -374,3 +374,28 @@ them carry `Co-authored-by`.
   keeps its firewall as it was (the update runs without `sudo`): with
   firewalld or ufw on, TCP 4244 must be let in by hand once. A fresh
   install opens it.
+- **Testing by hand found what tests did not** (2026-11-19, Windows 10 ↔
+  Hyprland):
+  - arboard (3.7) sets a file list on Windows without emptying the
+    clipboard first, so over files the Explorer copied the write was
+    ignored with no error: emptied first now;
+  - received files were offered back to the PC they came from on every
+    crossing, and the overlapping transfers made a paste come out as an
+    older file: each PC remembers where received files came from, and an
+    offer carries that origin (`FileOffer::origin`, #424);
+  - every crossing made a new offer of the same files, which cut a
+    transfer under way: the same files keep their offer.
+- **Bring / Ignore** is a small window in the bottom-right corner, like a
+  notice, sized to what it lists; where it appears is
+  `[interface] bring_position`, in Settings > General too. Enter brings,
+  Esc ignores, only there, never in pairing.
+- **Progress** shows after two seconds, in the same corner: bar, how much
+  of how much, speed and time left averaged over 5 s, the stage, Cancel;
+  then Done with Open folder. The daemon writes a line ten times a second
+  on the window's input (the channel #476 asked for).
+- **The last four offers are served**, not the last one only: copying
+  something else while files are still coming must not cut them short.
+  Transfers from one PC take turns.
+- **Windows' mark** says `HostUrl=mickey://<PC>` and `ZoneId=1`; the
+  clipboard's own small files say `mickey://` alone, since the data link
+  does not name the PC.
