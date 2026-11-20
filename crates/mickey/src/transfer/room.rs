@@ -6,9 +6,14 @@ use crate::platform::space::Space;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-/// The least room a transfer leaves free: 1 GB, or 5% of a big disk.
+/// The most room a transfer leaves free: on a big disk 5% is a lot (21 GB
+/// of 422 GB refused a 1.2 GB transfer with 18 GB free).
+const MARGIN_CAP: u64 = 5 << 30;
+
+/// The least room a transfer leaves free: 1 GB, or 5% of the disk, at most
+/// 5 GB.
 pub fn margin(total: u64) -> u64 {
-    (1 << 30).max(total / 20)
+    (1 << 30).max(total / 20).min(MARGIN_CAP)
 }
 
 /// How many bytes are missing for `need` bytes and the margin; 0 if it
@@ -82,9 +87,10 @@ mod tests {
     const GB: u64 = 1 << 30;
 
     #[test]
-    fn the_margin_is_a_gigabyte_or_five_percent() {
+    fn the_margin_is_a_gigabyte_or_five_percent_at_most_five() {
         assert_eq!(margin(10 * GB), GB);
-        assert_eq!(margin(1000 * GB), 50 * GB);
+        assert_eq!(margin(60 * GB), 3 * GB);
+        assert_eq!(margin(422 * GB), 5 * GB, "not 21 GB");
     }
 
     #[test]

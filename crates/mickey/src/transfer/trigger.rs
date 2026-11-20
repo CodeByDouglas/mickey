@@ -134,6 +134,75 @@ pub struct Transfers {
     /// for the one before it from that PC to end, instead of both sharing
     /// the network and the disk.
     pub lanes: Lanes,
+    /// What became of each offer fetched here, while Mickey runs: one
+    /// offered again (the keyboard crossed again) is fetched once, and one
+    /// that broke goes on from where it stopped (#475, #502).
+    pub fetches: Fetches,
+}
+
+/// Each offer fetched here, by the offering PC's key and the offer's id.
+#[derive(Default)]
+pub struct Fetches(std::sync::Mutex<std::collections::HashMap<([u8; 32], u64), Fetch>>);
+
+/// What became of one offer.
+enum Fetch {
+    /// Being fetched now.
+    Running,
+    /// Stopped (the network, a sleeping PC, a full disk, Cancel): what it
+    /// had done, and where, to go on.
+    Broken {
+        into: PathBuf,
+        fetched: Box<Fetched>,
+    },
+    /// All there: where its top-level files and folders landed.
+    Done(Vec<PathBuf>),
+}
+
+/// What to do with an offer that arrives.
+enum Begin {
+    /// Nothing: it is being fetched.
+    Skip,
+    /// It is all here already, at these paths: pasted again, not fetched
+    /// again (copied again on the other PC, or crossing again).
+    Here(Vec<PathBuf>),
+    /// Go on with it, into the same folder.
+    Resume(PathBuf, Box<Fetched>),
+    /// Fetch it for the first time.
+    Start,
+}
+
+impl Fetches {
+    /// Says what to do with offer `key`, and marks it as being fetched
+    /// unless it is running or here already. Files deleted since they
+    /// arrived are fetched again.
+    fn begin(&self, key: ([u8; 32], u64)) -> Begin {
+        let mut fetches = self.0.lock_anyway();
+        match fetches.get(&key) {
+            Some(Fetch::Running) => return Begin::Skip,
+            Some(Fetch::Done(landed)) if landed.iter().all(|path| path.exists()) => {
+                return Begin::Here(landed.clone());
+            }
+            _ => {}
+        }
+        match fetches.insert(key, Fetch::Running) {
+            Some(Fetch::Broken { into, fetched }) => Begin::Resume(into, fetched),
+            _ => Begin::Start,
+        }
+    }
+
+    /// Records how the fetch of `key` ended: what a broken one had done.
+    fn end(&self, key: ([u8; 32], u64), ended: Result<Vec<PathBuf>, (PathBuf, Box<Fetched>)>) {
+        let fetch = match ended {
+            Ok(landed) => Fetch::Done(landed),
+            Err((into, fetched)) => Fetch::Broken { into, fetched },
+        };
+        self.0.lock_anyway().insert(key, fetch);
+    }
+
+    /// Forgets `key`: the owner said Ignore, or it could not start.
+    fn forget(&self, key: ([u8; 32], u64)) {
+        self.0.lock_anyway().remove(&key);
+    }
 }
 
 /// A lock per PC, made on first use (PRD 0015's queue).
@@ -201,46 +270,68 @@ impl Transfers {
         }
         let this = Arc::clone(self);
         crate::threads::spawn("transfer fetch", move || {
+            let key = (offer.key, offer.offer.id);
             let who = crate::target::data::peer_name(offer.ip.unwrap_or(from));
-            let into = match this.landing(&offer, &who) {
-                Ok(Some(into)) => into,
-                Ok(None) => return,
-                Err(err) => return eprintln!("mickey: files not fetched: {err}"),
+            let (into, mut fetched) = match this.fetches.begin(key) {
+                Begin::Skip => return,
+                Begin::Here(landed) => return keeper.write(Content::Files(landed)),
+                Begin::Resume(into, fetched) => (into, *fetched),
+                Begin::Start => match this.landing(&offer, &who) {
+                    Ok(Some(into)) => {
+                        let mut fetched = Fetched::default();
+                        fetched.mark = crate::fs::mark::Mark::configured(&who);
+                        (into, fetched)
+                    }
+                    Ok(None) => return this.fetches.forget(key),
+                    Err(err) => {
+                        this.fetches.forget(key);
+                        return eprintln!("mickey: files not fetched: {err}");
+                    }
+                },
             };
             let before = keeper.read();
-            match this.fetch_shown(&offer, from, &who, &into) {
+            let result = this.fetch_shown(&offer, from, &who, &into, &mut fetched);
+            match &result {
                 // Everything skipped by the other PC: nothing to paste.
                 Ok(landed) if landed.is_empty() => {}
-                Ok(landed) if keeper.read() == before => keeper.write(Content::Files(landed)),
+                Ok(landed) if keeper.read() == before => {
+                    keeper.write(Content::Files(landed.clone()))
+                }
                 Ok(_) => println!(
                     "mickey: files arrived in {}, not pasted: something else was copied meanwhile",
                     into.display()
                 ),
-                Err(err) => eprintln!("mickey: files not fetched: {err}"),
+                Err(err) => eprintln!(
+                    "mickey: files not fetched: {err}; offered again, they go on from where they stopped"
+                ),
             }
+            let broken = |_| (into, Box::new(fetched));
+            this.fetches.end(key, result.map_err(broken));
         });
     }
 
-    /// Fetches `offer` into `into`, showing how it goes once it takes more
-    /// than a moment (`show`); where its top-level files and folders landed.
+    /// Fetches `offer` into `into`, going on from what `fetched` says was
+    /// done before, and showing how it goes once it takes more than a
+    /// moment (`show`); where its top-level files and folders landed.
     fn fetch_shown(
         &self,
         offer: &FileOffer,
         from: IpAddr,
         who: &str,
         into: &Path,
+        fetched: &mut Fetched,
     ) -> Result<Vec<PathBuf>, String> {
         // Waits its turn behind another transfer from the same PC.
         let lane = self.lanes.of(&offer.key);
         let _turn = lane.lock_anyway();
-        let mut link = self.connect(offer, from)?;
-        let mut fetched = Fetched::default();
-        fetched.mark = crate::fs::mark::Mark::configured(who);
+        let mut link = self
+            .connect(offer, from)
+            .inspect_err(|why| crate::transfer::show::failed(who, why))?;
         let shown = link
             .try_clone()
             .ok()
             .map(|stop| Watcher::start(who.to_string(), fetched.progress.clone(), stop));
-        let landed = self.receive(offer, &mut link, into, &mut fetched);
+        let landed = self.receive(offer, &mut link, into, fetched);
         if let Some(shown) = shown {
             shown.end(match &landed {
                 Ok(_) => Ended::Done {
@@ -445,6 +536,36 @@ mod tests {
     }
 
     #[test]
+    fn an_offer_is_fetched_once_and_a_broken_one_goes_on() {
+        let fetches = Fetches::default();
+        let key = ([5; 32], 42);
+        assert!(matches!(fetches.begin(key), Begin::Start));
+        assert!(
+            matches!(fetches.begin(key), Begin::Skip),
+            "offered again while it runs"
+        );
+        let mut fetched = Fetched::default();
+        fetched.summary.files = 7;
+        fetches.end(key, Err(("/somewhere".into(), Box::new(fetched))));
+        let Begin::Resume(into, fetched) = fetches.begin(key) else {
+            panic!("a broken fetch goes on");
+        };
+        assert_eq!(
+            (into, fetched.summary.files),
+            (PathBuf::from("/somewhere"), 7)
+        );
+        // All here: pasted again, not fetched again; fetched again once
+        // the files are gone.
+        let here = std::env::temp_dir();
+        fetches.end(key, Ok(vec![here.clone()]));
+        assert!(matches!(fetches.begin(key), Begin::Here(landed) if landed == [here]));
+        fetches.end(key, Ok(vec![PathBuf::from("/no/such/file/for/mickey")]));
+        assert!(matches!(fetches.begin(key), Begin::Start), "deleted since");
+        fetches.forget(key);
+        assert!(matches!(fetches.begin(key), Begin::Start), "forgotten");
+    }
+
+    #[test]
     fn transfers_from_one_pc_take_turns() {
         let lanes = Lanes::default();
         let (a, b) = (lanes.of(&[1; 32]), lanes.of(&[2; 32]));
@@ -494,6 +615,7 @@ mod tests {
             received: scratch.0.join("received"),
             came_from: Default::default(),
             lanes: Default::default(),
+            fetches: Default::default(),
             trusted: trusting(&scratch.0.join("trust"), None),
         };
         // Copied, then deleted before the keyboard crossed.
@@ -515,6 +637,7 @@ mod tests {
             received: scratch.0.join("received"),
             came_from: Default::default(),
             lanes: Default::default(),
+            fetches: Default::default(),
             trusted: trusting(&scratch.0.join("trust"), None),
         };
         // Refused before any connection: nothing listens at that address.
@@ -554,6 +677,7 @@ mod tests {
             received: scratch.0.join("a-received"),
             came_from: Default::default(),
             lanes: Default::default(),
+            fetches: Default::default(),
             trusted: trusting(&scratch.0.join("a-trust"), None),
         });
         let offers = Arc::clone(&a.offers);
@@ -576,12 +700,15 @@ mod tests {
             received: scratch.0.join("b-received"),
             came_from: Default::default(),
             lanes: Default::default(),
+            fetches: Default::default(),
             trusted: trusting(&scratch.0.join("b-trust"), Some(*a.identity.public())),
         });
         let fetch = |offer: FileOffer, name: &'static str| {
             let (b, into) = (Arc::clone(&b), scratch.0.join(name));
             std::fs::create_dir_all(&into).unwrap();
-            std::thread::spawn(move || b.fetch_shown(&offer, listen.ip(), "A", &into))
+            std::thread::spawn(move || {
+                b.fetch_shown(&offer, listen.ip(), "A", &into, &mut Fetched::default())
+            })
         };
         let (first, second) = (fetch(x, "x"), fetch(y, "y"));
         assert!(first.join().unwrap().is_ok(), "X arrives whole");
@@ -611,6 +738,7 @@ mod tests {
             received: scratch.0.join("a-received"),
             came_from: Default::default(),
             lanes: Default::default(),
+            fetches: Default::default(),
             trusted: trusting(&scratch.0.join("a-trust"), None),
         });
         let offers = Arc::clone(&a.offers);
@@ -662,6 +790,7 @@ mod tests {
             received: scratch.0.join("b-received"),
             came_from: Default::default(),
             lanes: Default::default(),
+            fetches: Default::default(),
             trusted: trusting(&scratch.0.join("b-trust"), Some(*a.identity.public())),
         });
         let b_keeper = Keeper::in_memory(Some(Content::Text("copied before".into())));

@@ -399,3 +399,8 @@ them carry `Co-authored-by`.
 - **Windows' mark** says `HostUrl=mickey://<PC>` and `ZoneId=1`; the
   clipboard's own small files say `mickey://` alone, since the data link
   does not name the PC.
+- **The margin is capped at 5 GB** (2026-11-19): "1 GB or 5% of the disk"
+  meant 21 GB on the owner's 422 GB `/home`, and a 1.2 GB transfer was
+  refused with 18 GB free. Now 1 GB or 5%, at most 5 GB. And a transfer
+  that fails before its window opens (no room, the other PC out of reach)
+  still shows the window, with why: it went to the log only.
