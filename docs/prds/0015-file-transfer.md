@@ -284,7 +284,7 @@ own files:
 - [ ] Progress window with real stages, a queue, Cancel, minimizable. *(Stages, Cancel and the queue work; a queued transfer shows nothing while it waits, and the window is not minimizable, #502.)*
 - [x] The clipboard keeps working during a transfer.
 - [x] Mark of the Web from Mickey, Local intranet by default, configurable.
-- [ ] Cleaning suggestion; abandoned `.part` removed after 7 days. *(Removed after 7 days. The Bring question says how much `Downloads/Mickey` holds, with Open folder, when it is over 10 GB or the disk would drop under 10% free. Not yet: each item's age, and making the 10 GB and 10% configurable.)*
+- [x] Cleaning suggestion; abandoned `.part` removed after 7 days. *(The Bring question says how much `Downloads/Mickey` holds when it is over `[interface] clean_over_gb` (10) or the disk would drop under `clean_below_percent` (10) free, both in Settings > General. It lists the five biggest things, each with when it arrived, when it last changed or "never changed", and "incomplete" for a transfer that stopped; with Open folder. Received files do not keep their original modification time, so "arrived" is when the item was made here.)*
 - [x] Older Mickey versions fall back to today's path.
 
 ## Non-Goals

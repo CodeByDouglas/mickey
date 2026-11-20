@@ -263,7 +263,7 @@ fn main() -> ExitCode {
     {
         return progress::window(who);
     }
-    if let [command, who, bytes, what, held, folder] = args.as_slice()
+    if let [command, who, bytes, what, held, folder, items] = args.as_slice()
         && command == "bring"
         && let (Ok(bytes), Ok(held)) = (bytes.parse(), held.parse::<u64>())
     {
@@ -273,6 +273,7 @@ fn main() -> ExitCode {
             what: what.clone(),
             held: (held > 0).then_some(held),
             folder: folder.clone(),
+            items: bring::items(items),
         });
     }
     // `switcher --mirror …`: the copy for the PCs not in use.
