@@ -80,20 +80,9 @@ pub fn listen(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::free_input_port;
     use std::sync::mpsc;
     use std::time::Duration;
-
-    /// A free port for the input link, with the two after it free too.
-    fn free_input_port() -> SocketAddr {
-        loop {
-            let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-            let addr = probe.local_addr().unwrap();
-            drop(probe);
-            if TcpListener::bind(transport::transfer_address(addr)).is_ok() {
-                return addr;
-            }
-        }
-    }
 
     /// Serves on a free port; each link is held until the test ends, and
     /// its peer's key sent on `got`.

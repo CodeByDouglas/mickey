@@ -21,6 +21,8 @@ mod platform;
 mod run;
 mod source;
 mod target;
+#[cfg(test)]
+mod test_util;
 mod threads;
 mod transfer;
 mod tray;

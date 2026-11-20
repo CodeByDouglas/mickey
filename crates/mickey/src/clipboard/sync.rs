@@ -681,8 +681,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::net::identity::Identity;
-    use std::net::{TcpListener, TcpStream};
+    use crate::test_util::link_pair;
     use std::sync::{Arc, Mutex};
     use std::thread;
 
@@ -699,13 +698,11 @@ mod tests {
 
     #[test]
     fn the_target_answers_and_takes_what_it_is_sent() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
+        let (mut link, theirs) = link_pair();
         let written = Arc::new(Mutex::new(Vec::new()));
         let target_written = Arc::clone(&written);
         let target = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            let link = theirs;
             // The target's clipboard holds a text.
             let _ = answer(
                 link,
@@ -719,8 +716,6 @@ mod tests {
                 None,
             );
         });
-        let stream = TcpStream::connect(addr).unwrap();
-        let mut link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
         let ask = |link: &mut Link, wire: Wire| link.send_bulk(&wire::encode(&wire).unwrap());
 
         ask(&mut link, Wire::Ask).unwrap();
@@ -745,11 +740,9 @@ mod tests {
 
     #[test]
     fn a_target_says_it_knows_transfers_and_the_clipboard_goes_on() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
+        let (mut link, theirs) = link_pair();
         let target = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            let link = theirs;
             let _ = answer(
                 link,
                 || Some(Content::Text("copied".into())),
@@ -760,8 +753,6 @@ mod tests {
                 None,
             );
         });
-        let stream = TcpStream::connect(addr).unwrap();
-        let mut link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
         assert!(ask_transfers(&mut link).unwrap());
         link.send_bulk(&wire::encode(&Wire::Ask).unwrap()).unwrap();
         let reply = wire::decode(&link.recv_bulk().unwrap()).unwrap();
@@ -772,17 +763,13 @@ mod tests {
 
     #[test]
     fn an_older_target_that_says_nothing_does_not_know_transfers() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
+        let (mut link, theirs) = link_pair();
         let target = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            let mut link = theirs;
             // As an older Mickey: it reads the message and answers nothing.
             let _ = link.recv_bulk();
             let _ = link.recv_bulk();
         });
-        let stream = TcpStream::connect(addr).unwrap();
-        let mut link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
         let started = Instant::now();
         assert!(!ask_transfers(&mut link).unwrap());
         assert!(started.elapsed() < TRANSFERS_WAIT * 2);
@@ -792,13 +779,11 @@ mod tests {
 
     #[test]
     fn a_clipboard_from_a_pc_not_in_control_is_refused() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
+        let (mut link, theirs) = link_pair();
         let written = Arc::new(Mutex::new(Vec::new()));
         let target_written = Arc::clone(&written);
         let target = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            let link = theirs;
             let _ = answer(
                 link,
                 || None,
@@ -810,8 +795,6 @@ mod tests {
                 None,
             );
         });
-        let stream = TcpStream::connect(addr).unwrap();
-        let mut link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
         let sent = Wire::Content(Content::Text("from the source".into()));
         link.send_bulk(&wire::encode(&sent).unwrap()).unwrap();
         drop(link);
@@ -821,15 +804,11 @@ mod tests {
 
     #[test]
     fn a_crossing_overtaken_by_another_sends_nothing() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
+        let (link, theirs) = link_pair();
         let target = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            let mut link = theirs;
             wire::decode(&link.recv_bulk().unwrap()).unwrap()
         });
-        let stream = TcpStream::connect(addr).unwrap();
-        let link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
         let mut links = HashMap::from([(0, link)]);
         let mut shared = HashMap::new();
         let keeper = Keeper::in_memory(Some(Content::Text("copied before".into())));
@@ -872,14 +851,12 @@ mod tests {
     /// keyboard to B, back to A and to B again, copying nothing new.
     #[test]
     fn the_same_clipboard_is_not_sent_again_to_the_same_peer() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
+        let (link, theirs) = link_pair();
         // What reached B's clipboard, in order; B's clipboard is the last.
         let written = Arc::new(Mutex::new(Vec::new()));
         let b_written = Arc::clone(&written);
         let b = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            let link = theirs;
             let read_back = Arc::clone(&b_written);
             let _ = answer(
                 link,
@@ -891,8 +868,6 @@ mod tests {
                 None,
             );
         });
-        let stream = TcpStream::connect(addr).unwrap();
-        let link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
         let mut links = HashMap::from([(0, link)]);
         let mut shared = HashMap::new();
         let keeper = Keeper::in_memory(Some(Content::Text("copied on A".into())));
@@ -932,11 +907,9 @@ mod tests {
 
     #[test]
     fn asked_for_what_it_was_just_sent_a_target_answers_nothing() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
+        let (mut link, theirs) = link_pair();
         let target = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            let link = theirs;
             let held = Mutex::new(None);
             let _ = answer(
                 link,
@@ -948,8 +921,6 @@ mod tests {
                 None,
             );
         });
-        let stream = TcpStream::connect(addr).unwrap();
-        let mut link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
         let mut send = |wire: Wire| link.send_bulk(&wire::encode(&wire).unwrap()).unwrap();
         send(Wire::Content(Content::Text("same".into())));
         send(Wire::Ask);

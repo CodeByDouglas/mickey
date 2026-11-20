@@ -7,6 +7,7 @@
 //! half old and half new.
 
 use crate::fs::open;
+use crate::net::invalid;
 use crate::net::secure::Link;
 use crate::transfer::hash::{self, HashRead};
 use crate::transfer::offer::Listing;
@@ -25,16 +26,13 @@ pub fn answer_fetches(
     find: impl Fn(u64) -> Option<Arc<Listing>>,
 ) -> io::Result<()> {
     loop {
-        let bytes = match link.recv_bulk() {
-            Ok(bytes) => bytes,
+        // `recv` passes over `StillHere`: the other PC is re-reading what
+        // it has of a file.
+        let (asked, index, from) = match wire::recv(link) {
+            Ok(Message::Fetch { offer, index, from }) => (offer, index, from),
+            Ok(_) => return Err(invalid("expected a fetch".into())),
             Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(err) => return Err(err),
-        };
-        let (asked, index, from) = match wire::decode(&bytes).map_err(invalid)? {
-            Message::Fetch { offer, index, from } => (offer, index, from),
-            // The other PC is re-reading what it has of a file.
-            Message::StillHere => continue,
-            _ => return Err(invalid("expected a fetch".into())),
         };
         let listing = find(asked).ok_or_else(|| invalid("a fetch for an unknown offer".into()))?;
         let (path, size, modified) = listing
@@ -57,7 +55,7 @@ fn send_file(
     modified: Option<SystemTime>,
     from: u64,
 ) -> io::Result<()> {
-    let skip = |link: &mut Link, why| send(link, &Message::Skip { index, why });
+    let skip = |link: &mut Link, why| wire::send(link, &Message::Skip { index, why });
     let Ok(mut file) = open::to_read(path) else {
         return skip(link, Why::Gone);
     };
@@ -69,7 +67,7 @@ fn send_file(
     let mut hasher = blake3::Hasher::new();
     hash::hash_start(&mut file, from, &mut hasher, link)?;
     file.seek(SeekFrom::Start(from))?;
-    send(
+    wire::send(
         link,
         &Message::File {
             index,
@@ -84,7 +82,7 @@ fn send_file(
     if !unchanged(&file, size, modified) {
         return skip(link, Why::Changed);
     }
-    send(
+    wire::send(
         link,
         &Message::Hash {
             index,
@@ -98,12 +96,4 @@ fn send_file(
 fn unchanged(file: &std::fs::File, size: u64, modified: Option<SystemTime>) -> bool {
     file.metadata()
         .is_ok_and(|now| now.len() == size && now.modified().ok() == modified)
-}
-
-fn send(link: &mut Link, message: &Message) -> io::Result<()> {
-    link.send_bulk(&wire::encode(message))
-}
-
-fn invalid(message: String) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message)
 }

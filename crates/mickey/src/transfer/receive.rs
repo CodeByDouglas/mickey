@@ -13,6 +13,7 @@
 //! continues from its last byte.
 
 use crate::fs::mark::Mark;
+use crate::net::invalid;
 use crate::net::secure::Link;
 use crate::platform::space;
 use crate::threads::LockAnyway;
@@ -244,7 +245,7 @@ fn fetch_file(
             (file, from)
         }
     };
-    send(link, &Message::Fetch { offer, index, from })?;
+    wire::send(link, &Message::Fetch { offer, index, from })?;
     let folder = part.parent().unwrap_or(&part);
     let result = write_verified(
         link,
@@ -295,7 +296,7 @@ fn write_verified(
     folder: &Path,
     progress: &Mutex<Progress>,
 ) -> io::Result<Option<Why>> {
-    match recv(link)? {
+    match wire::recv(link)? {
         Message::Skip { index: got, why } if got == index => return Ok(Some(why)),
         Message::File { index: got, size } if got == index && size == rest => {}
         _ => return Err(invalid(format!("not the file {index} that was asked for"))),
@@ -310,7 +311,7 @@ fn write_verified(
     };
     link.recv_stream(&mut writer, rest)?;
     writer.flush()?;
-    match recv(link)? {
+    match wire::recv(link)? {
         Message::Skip { index: got, why } if got == index => Ok(Some(why)),
         Message::Hash { index: got, hash } if got == index => {
             if hasher.finalize() == blake3::Hash::from_bytes(hash) {
@@ -358,20 +359,6 @@ fn part_of(target: &Path) -> PathBuf {
     target.with_file_name(name)
 }
 
-fn send(link: &mut Link, message: &Message) -> io::Result<()> {
-    link.send_bulk(&wire::encode(message))
-}
-
-/// The next message, past any `StillHere`.
-fn recv(link: &mut Link) -> io::Result<Message> {
-    loop {
-        match wire::decode(&link.recv_bulk()?).map_err(invalid)? {
-            Message::StillHere => continue,
-            message => return Ok(message),
-        }
-    }
-}
-
 /// Something appeared at `path` while the transfer waited to write there.
 /// No name in it: errors reach the log, where copied names never go.
 fn taken() -> io::Error {
@@ -381,66 +368,25 @@ fn taken() -> io::Error {
     )
 }
 
-fn invalid(message: String) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::identity::Identity;
+    use crate::test_util::{Scratch, link_pair};
     use crate::transfer::offer::{self, Entry, Listing};
     use crate::transfer::send;
-    use std::net::{TcpListener, TcpStream};
     use std::thread;
 
-    /// A fresh folder under the system's temp folder, removed on drop.
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new(name: &str) -> Scratch {
-            let dir =
-                std::env::temp_dir().join(format!("mickey-receive-{name}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(dir.join("from")).unwrap();
-            std::fs::create_dir_all(dir.join("into")).unwrap();
-            Scratch(dir)
-        }
-
-        fn file(&self, path: &str, bytes: &[u8]) {
-            let path = self.0.join("from").join(path);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, bytes).unwrap();
-        }
-
-        fn dest(&self) -> PathBuf {
-            self.0.join("into")
-        }
+    /// A scratch folder with `from/`, where the copied files are, and
+    /// `into/`, where they land.
+    fn sides(name: &str) -> Scratch {
+        let scratch = Scratch::new(name);
+        std::fs::create_dir_all(scratch.0.join("from")).unwrap();
+        std::fs::create_dir_all(scratch.0.join("into")).unwrap();
+        scratch
     }
 
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// Both ends of a secure link over localhost.
-    fn link_pair() -> (Link, Link) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let theirs = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            Link::respond(stream, &Identity::generate().unwrap()).unwrap()
-        });
-        let ours = Link::initiate(
-            TcpStream::connect(addr).unwrap(),
-            &Identity::generate().unwrap(),
-        );
-        (ours.unwrap(), theirs.join().unwrap())
-    }
-
-    /// What `send::answer_fetches` finds for a PC that handed out only `listing`, as
-    /// offer `id`.
+    /// What `send::answer_fetches` finds for a PC that handed out only
+    /// `listing`, as offer `id`.
     fn only(listing: Listing, id: u64) -> impl Fn(u64) -> Option<std::sync::Arc<Listing>> {
         let listing = std::sync::Arc::new(listing);
         move |asked| (asked == id).then(|| std::sync::Arc::clone(&listing))
@@ -460,16 +406,16 @@ mod tests {
 
     #[test]
     fn a_tree_arrives_whole_and_verified() {
-        let scratch = Scratch::new("tree");
+        let scratch = sides("tree");
         let big: Vec<u8> = (0..300_000u32).map(|i| (i % 253) as u8).collect();
-        scratch.file("fotos/praia.jpg", &big);
-        scratch.file("fotos/2026/a.txt", b"hello");
-        scratch.file("fotos/empty.txt", b"");
+        scratch.file("from/fotos/praia.jpg", &big);
+        scratch.file("from/fotos/2026/a.txt", b"hello");
+        scratch.file("from/fotos/empty.txt", b"");
         std::fs::create_dir(scratch.0.join("from/fotos/nothing")).unwrap();
         let listing = offer::list(&[scratch.0.join("from/fotos")]).unwrap();
         let offer = listing.offer(7);
-        let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
-        let fotos = scratch.dest().join("fotos");
+        let summary = transfer(listing, &offer, &scratch.0.join("into")).unwrap();
+        let fotos = scratch.0.join("into").join("fotos");
         assert_eq!(std::fs::read(fotos.join("praia.jpg")).unwrap(), big);
         assert_eq!(std::fs::read(fotos.join("2026/a.txt")).unwrap(), b"hello");
         assert!(fotos.join("empty.txt").is_file());
@@ -481,38 +427,45 @@ mod tests {
 
     #[test]
     fn a_name_already_taken_gets_a_number() {
-        let scratch = Scratch::new("taken");
-        scratch.file("notes.txt", b"new");
-        std::fs::write(scratch.dest().join("notes.txt"), b"old").unwrap();
+        let scratch = sides("taken");
+        scratch.file("from/notes.txt", b"new");
+        std::fs::write(scratch.0.join("into").join("notes.txt"), b"old").unwrap();
         let listing = offer::list(&[scratch.0.join("from/notes.txt")]).unwrap();
         let offer = listing.offer(7);
-        let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
+        let summary = transfer(listing, &offer, &scratch.0.join("into")).unwrap();
         assert_eq!(
-            std::fs::read(scratch.dest().join("notes.txt")).unwrap(),
+            std::fs::read(scratch.0.join("into").join("notes.txt")).unwrap(),
             b"old"
         );
         assert_eq!(
-            std::fs::read(scratch.dest().join("notes (2).txt")).unwrap(),
+            std::fs::read(scratch.0.join("into").join("notes (2).txt")).unwrap(),
             b"new"
         );
-        assert_eq!(summary.landed, [scratch.dest().join("notes (2).txt")]);
+        assert_eq!(
+            summary.landed,
+            [scratch.0.join("into").join("notes (2).txt")]
+        );
     }
 
     #[test]
     fn the_owners_part_file_and_dotted_folders_are_left_alone() {
-        let scratch = Scratch::new("owners");
-        scratch.file("notes.txt", b"new");
-        scratch.file("my.project/a.txt", b"a");
-        std::fs::write(scratch.dest().join("notes.txt.mickey-part"), b"mine").unwrap();
-        std::fs::create_dir(scratch.dest().join("my.project")).unwrap();
+        let scratch = sides("owners");
+        scratch.file("from/notes.txt", b"new");
+        scratch.file("from/my.project/a.txt", b"a");
+        std::fs::write(
+            scratch.0.join("into").join("notes.txt.mickey-part"),
+            b"mine",
+        )
+        .unwrap();
+        std::fs::create_dir(scratch.0.join("into").join("my.project")).unwrap();
         let roots = [
             scratch.0.join("from/notes.txt"),
             scratch.0.join("from/my.project"),
         ];
         let listing = offer::list(&roots).unwrap();
         let offer = listing.offer(7);
-        let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
-        let dest = scratch.dest();
+        let summary = transfer(listing, &offer, &scratch.0.join("into")).unwrap();
+        let dest = scratch.0.join("into");
         assert_eq!(
             std::fs::read(dest.join("notes.txt.mickey-part")).unwrap(),
             b"mine"
@@ -530,28 +483,28 @@ mod tests {
 
     #[test]
     fn a_skipped_file_did_not_land() {
-        let scratch = Scratch::new("skipped");
-        scratch.file("gone.txt", b"x");
+        let scratch = sides("skipped");
+        scratch.file("from/gone.txt", b"x");
         let listing = offer::list(&[scratch.0.join("from/gone.txt")]).unwrap();
         let offer = listing.offer(7);
         std::fs::remove_file(scratch.0.join("from/gone.txt")).unwrap();
-        let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
+        let summary = transfer(listing, &offer, &scratch.0.join("into")).unwrap();
         assert!(summary.landed.is_empty());
         assert_eq!(summary.skipped, [("gone.txt".to_string(), Why::Gone)]);
     }
 
     #[test]
     fn a_file_changed_or_deleted_since_the_offer_is_skipped() {
-        let scratch = Scratch::new("changed");
-        scratch.file("docs/changes.txt", b"before");
-        scratch.file("docs/goes.txt", b"here");
-        scratch.file("docs/stays.txt", b"same");
+        let scratch = sides("changed");
+        scratch.file("from/docs/changes.txt", b"before");
+        scratch.file("from/docs/goes.txt", b"here");
+        scratch.file("from/docs/stays.txt", b"same");
         let listing = offer::list(&[scratch.0.join("from/docs")]).unwrap();
         let offer = listing.offer(7);
-        scratch.file("docs/changes.txt", b"after, longer");
+        scratch.file("from/docs/changes.txt", b"after, longer");
         std::fs::remove_file(scratch.0.join("from/docs/goes.txt")).unwrap();
-        let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
-        let docs = scratch.dest().join("docs");
+        let summary = transfer(listing, &offer, &scratch.0.join("into")).unwrap();
+        let docs = scratch.0.join("into").join("docs");
         assert_eq!(
             summary.skipped,
             [
@@ -568,25 +521,25 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_file_swapped_for_a_link_after_the_offer_is_not_followed() {
-        let scratch = Scratch::new("swapped");
-        scratch.file("secret", b"key");
-        scratch.file("shared/a.txt", b"ok");
+        let scratch = sides("swapped");
+        scratch.file("from/secret", b"key");
+        scratch.file("from/shared/a.txt", b"ok");
         let listing = offer::list(&[scratch.0.join("from/shared")]).unwrap();
         let offer = listing.offer(7);
         let a = scratch.0.join("from/shared/a.txt");
         std::fs::remove_file(&a).unwrap();
         std::os::unix::fs::symlink(scratch.0.join("from/secret"), &a).unwrap();
-        let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
+        let summary = transfer(listing, &offer, &scratch.0.join("into")).unwrap();
         assert_eq!(summary.skipped, [("shared/a.txt".to_string(), Why::Gone)]);
-        assert!(!scratch.dest().join("shared/a.txt").exists());
+        assert!(!scratch.0.join("into").join("shared/a.txt").exists());
     }
 
     #[test]
     fn a_broken_transfer_resumes_where_it_stopped() {
-        let scratch = Scratch::new("resume");
+        let scratch = sides("resume");
         let big: Vec<u8> = (0..1_000_000u32).map(|i| (i % 241) as u8).collect();
-        scratch.file("docs/first.txt", b"first");
-        scratch.file("docs/big.bin", &big);
+        scratch.file("from/docs/first.txt", b"first");
+        scratch.file("from/docs/big.bin", &big);
         let listing = offer::list(&[scratch.0.join("from/docs")]).unwrap();
         let offer = listing.offer(7);
         let mut fetched = Fetched::default();
@@ -606,9 +559,9 @@ mod tests {
         });
         // `big.bin` comes first in name order, `first.txt` after.
         assert_eq!(offer.entries[1].path, "docs/big.bin");
-        assert!(fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).is_err());
+        assert!(fetch(&mut fetching, &offer, &scratch.0.join("into"), &mut fetched).is_err());
         breaking.join().unwrap();
-        let part = scratch.dest().join("docs/big.bin.mickey-part");
+        let part = scratch.0.join("into").join("docs/big.bin.mickey-part");
         assert_eq!(std::fs::metadata(&part).unwrap().len(), 300_000, "kept");
         {
             let progress = fetched.progress.lock_anyway();
@@ -620,10 +573,10 @@ mod tests {
         let (mut fetching, mut serving) = link_pair();
         let server =
             thread::spawn(move || send::answer_fetches(&mut serving, only(listing, id)).unwrap());
-        fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).unwrap();
+        fetch(&mut fetching, &offer, &scratch.0.join("into"), &mut fetched).unwrap();
         drop(fetching);
         server.join().unwrap();
-        let docs = scratch.dest().join("docs");
+        let docs = scratch.0.join("into").join("docs");
         assert_eq!(std::fs::read(docs.join("big.bin")).unwrap(), big);
         assert_eq!(std::fs::read(docs.join("first.txt")).unwrap(), b"first");
         assert!(!part.exists());
@@ -636,18 +589,18 @@ mod tests {
 
     #[test]
     fn two_copied_files_never_get_the_same_name() {
-        let scratch = Scratch::new("same-name");
-        scratch.file("photo (2).jpg", b"two");
-        scratch.file("photo.jpg", b"one");
-        std::fs::write(scratch.dest().join("photo.jpg"), b"owner's").unwrap();
+        let scratch = sides("same-name");
+        scratch.file("from/photo (2).jpg", b"two");
+        scratch.file("from/photo.jpg", b"one");
+        std::fs::write(scratch.0.join("into").join("photo.jpg"), b"owner's").unwrap();
         let roots = [
             scratch.0.join("from/photo (2).jpg"),
             scratch.0.join("from/photo.jpg"),
         ];
         let listing = offer::list(&roots).unwrap();
         let offer = listing.offer(7);
-        transfer(listing, &offer, &scratch.dest()).unwrap();
-        let dest = scratch.dest();
+        transfer(listing, &offer, &scratch.0.join("into")).unwrap();
+        let dest = scratch.0.join("into");
         assert_eq!(std::fs::read(dest.join("photo.jpg")).unwrap(), b"owner's");
         assert_eq!(std::fs::read(dest.join("photo (2).jpg")).unwrap(), b"two");
         assert_eq!(std::fs::read(dest.join("photo (3).jpg")).unwrap(), b"one");
@@ -666,56 +619,56 @@ mod tests {
 
     #[test]
     fn a_transfer_broken_before_its_first_byte_resumes() {
-        let scratch = Scratch::new("first-byte");
-        scratch.file("a.txt", b"hello");
+        let scratch = sides("first-byte");
+        scratch.file("from/a.txt", b"hello");
         let listing = offer::list(&[scratch.0.join("from/a.txt")]).unwrap();
         let offer = listing.offer(7);
         let mut fetched = Fetched::default();
-        break_at_once(&offer, &scratch.dest(), &mut fetched);
+        break_at_once(&offer, &scratch.0.join("into"), &mut fetched);
         assert!(
-            scratch.dest().join("a.txt.mickey-part").is_file(),
+            scratch.0.join("into").join("a.txt.mickey-part").is_file(),
             "an empty .part"
         );
         let (mut fetching, mut serving) = link_pair();
         let id = offer.id;
         let server =
             thread::spawn(move || send::answer_fetches(&mut serving, only(listing, id)).unwrap());
-        fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).unwrap();
+        fetch(&mut fetching, &offer, &scratch.0.join("into"), &mut fetched).unwrap();
         drop(fetching);
         server.join().unwrap();
         assert_eq!(
-            std::fs::read(scratch.dest().join("a.txt")).unwrap(),
+            std::fs::read(scratch.0.join("into").join("a.txt")).unwrap(),
             b"hello"
         );
     }
 
     #[test]
     fn what_the_owner_puts_at_a_name_while_waiting_is_kept() {
-        let scratch = Scratch::new("owner-meanwhile");
-        scratch.file("a.txt", b"from the other PC");
+        let scratch = sides("owner-meanwhile");
+        scratch.file("from/a.txt", b"from the other PC");
         let listing = offer::list(&[scratch.0.join("from/a.txt")]).unwrap();
         let offer = listing.offer(7);
         let mut fetched = Fetched::default();
-        break_at_once(&offer, &scratch.dest(), &mut fetched);
-        std::fs::write(scratch.dest().join("a.txt"), b"the owner's").unwrap();
+        break_at_once(&offer, &scratch.0.join("into"), &mut fetched);
+        std::fs::write(scratch.0.join("into").join("a.txt"), b"the owner's").unwrap();
         let (mut fetching, mut serving) = link_pair();
         let id = offer.id;
         let server =
             thread::spawn(move || send::answer_fetches(&mut serving, only(listing, id)).unwrap());
-        let err = fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).unwrap_err();
+        let err = fetch(&mut fetching, &offer, &scratch.0.join("into"), &mut fetched).unwrap_err();
         drop(fetching);
         server.join().unwrap();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(
-            std::fs::read(scratch.dest().join("a.txt")).unwrap(),
+            std::fs::read(scratch.0.join("into").join("a.txt")).unwrap(),
             b"the owner's"
         );
-        assert!(!scratch.dest().join("a.txt.mickey-part").exists());
+        assert!(!scratch.0.join("into").join("a.txt.mickey-part").exists());
     }
 
     #[test]
     fn an_offer_that_does_not_fit_writes_nothing() {
-        let scratch = Scratch::new("too-big");
+        let scratch = sides("too-big");
         let (mut fetching, _serving) = link_pair();
         let offer = Offer {
             id: 1,
@@ -727,17 +680,20 @@ mod tests {
         let err = fetch(
             &mut fetching,
             &offer,
-            &scratch.dest(),
+            &scratch.0.join("into"),
             &mut Fetched::default(),
         )
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::StorageFull);
-        assert_eq!(std::fs::read_dir(scratch.dest()).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_dir(scratch.0.join("into")).unwrap().count(),
+            0
+        );
     }
 
     #[test]
     fn a_sender_that_lies_about_the_size_leaves_nothing() {
-        let scratch = Scratch::new("lies");
+        let scratch = sides("lies");
         let (mut fetching, mut serving) = link_pair();
         let offer = Offer {
             id: 1,
@@ -758,12 +714,15 @@ mod tests {
             fetch(
                 &mut fetching,
                 &offer,
-                &scratch.dest(),
+                &scratch.0.join("into"),
                 &mut Fetched::default()
             )
             .is_err()
         );
         liar.join().unwrap();
-        assert_eq!(std::fs::read_dir(scratch.dest()).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_dir(scratch.0.join("into")).unwrap().count(),
+            0
+        );
     }
 }

@@ -1,5 +1,6 @@
 //! The connection from source to target: TCP carrying the secure link.
 
+use super::invalid;
 use crate::edges;
 use crate::input::event::InputEvent;
 use crate::input::held::HeldSet;
@@ -364,10 +365,6 @@ fn release_all(keys: &mut HeldSet, buttons: &mut HeldSet, act: &mut impl FnMut(E
             pressed: false,
         }));
     });
-}
-
-fn invalid(message: String) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
 #[cfg(test)]

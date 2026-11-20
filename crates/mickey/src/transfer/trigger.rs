@@ -484,6 +484,7 @@ fn total(offer: &Offer) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{Scratch, free_input_port};
     use crate::transfer::offer::Entry;
 
     fn file_offer(ip: Option<IpAddr>) -> FileOffer {
@@ -600,15 +601,6 @@ mod tests {
         assert_eq!(given.address(from), "192.0.2.7:4242".parse().unwrap());
     }
 
-    /// A fresh folder under the system's temp folder, removed on drop.
-    struct Scratch(PathBuf);
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     /// A list of trusted PCs kept in `dir`, holding `key` if given.
     fn trusting(dir: &std::path::Path, key: Option<[u8; 32]>) -> trust::Shared {
         std::fs::create_dir_all(dir).unwrap();
@@ -621,8 +613,7 @@ mod tests {
 
     #[test]
     fn copied_files_that_are_gone_are_not_offered() {
-        let scratch =
-            Scratch(std::env::temp_dir().join(format!("mickey-gone-{}", std::process::id())));
+        let scratch = Scratch::new("gone");
         let transfers = Transfers {
             offers: Arc::new(Offers::default()),
             identity: Arc::new(Identity::generate().unwrap()),
@@ -643,8 +634,7 @@ mod tests {
 
     #[test]
     fn files_offered_by_a_pc_not_paired_are_not_fetched() {
-        let scratch =
-            Scratch(std::env::temp_dir().join(format!("mickey-unpaired-{}", std::process::id())));
+        let scratch = Scratch::new("unpaired");
         let b = Transfers {
             offers: Arc::new(Offers::default()),
             identity: Arc::new(Identity::generate().unwrap()),
@@ -663,22 +653,9 @@ mod tests {
         assert!(!scratch.0.join("received").exists());
     }
 
-    /// A free port for an input link, with the transfer port after it free.
-    fn free_input_port() -> SocketAddr {
-        loop {
-            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let addr = probe.local_addr().unwrap();
-            drop(probe);
-            if std::net::TcpListener::bind(transport::transfer_address(addr)).is_ok() {
-                return addr;
-            }
-        }
-    }
-
     #[test]
     fn copying_again_while_files_come_cuts_nothing_short() {
-        let scratch =
-            Scratch(std::env::temp_dir().join(format!("mickey-turns-{}", std::process::id())));
+        let scratch = Scratch::new("turns");
         let from = scratch.0.join("from");
         std::fs::create_dir_all(&from).unwrap();
         std::fs::write(from.join("x.bin"), vec![1u8; 3_000_000]).unwrap();
@@ -739,8 +716,7 @@ mod tests {
     fn copied_files_cross_as_an_offer_and_are_pasted_once_verified() {
         use crate::clipboard::wire::{self as clip, Wire};
         use crate::net::secure::Link;
-        let scratch =
-            Scratch(std::env::temp_dir().join(format!("mickey-trigger-{}", std::process::id())));
+        let scratch = Scratch::new("trigger");
         let fotos = scratch.0.join("from/fotos");
         std::fs::create_dir_all(&fotos).unwrap();
         std::fs::write(fotos.join("a.txt"), b"hello").unwrap();
