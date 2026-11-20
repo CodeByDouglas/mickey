@@ -141,8 +141,12 @@ pub fn remove_abandoned(folder: &Path, now: SystemTime) -> usize {
     removed
 }
 
+/// A file Mickey was receiving, never one that only ends in `.part`.
 fn is_part(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| ext == "part")
+    path.file_name().is_some_and(|name| {
+        name.to_string_lossy()
+            .ends_with(crate::transfer::path::RECEIVING)
+    })
 }
 
 #[cfg(test)]
@@ -227,9 +231,9 @@ mod tests {
         std::fs::create_dir_all(scratch.0.join("fotos/2026")).unwrap();
         std::fs::write(scratch.0.join("fotos/a.jpg"), [0; 100]).unwrap();
         std::fs::write(scratch.0.join("fotos/2026/b.jpg"), [0; 50]).unwrap();
-        std::fs::write(scratch.0.join("fotos/2026/c.jpg.part"), [0; 7]).unwrap();
+        std::fs::write(scratch.0.join("fotos/2026/c.jpg.mickey-part"), [0; 7]).unwrap();
         std::fs::write(scratch.0.join("notes.txt"), [0; 3]).unwrap();
-        std::fs::write(scratch.0.join("video.mp4.part"), [0; 20]).unwrap();
+        std::fs::write(scratch.0.join("video.mp4.mickey-part"), [0; 20]).unwrap();
         let (mut items, parts) = look(&scratch.0);
         items.sort_by(|a, b| a.path.cmp(&b.path));
         let sizes: Vec<u64> = items.iter().map(|item| item.size).collect();
@@ -241,18 +245,23 @@ mod tests {
     fn only_parts_untouched_for_a_week_are_removed() {
         let scratch = Scratch::new("abandoned");
         std::fs::create_dir_all(scratch.0.join("fotos")).unwrap();
-        std::fs::write(scratch.0.join("fotos/old.jpg.part"), b"x").unwrap();
+        std::fs::write(scratch.0.join("fotos/old.jpg.mickey-part"), b"x").unwrap();
         std::fs::write(scratch.0.join("kept.jpg"), b"x").unwrap();
+        std::fs::write(scratch.0.join("chapter.part"), b"x").unwrap();
         let now = SystemTime::now();
         assert_eq!(remove_abandoned(&scratch.0, now), 0, "a fresh .part stays");
         assert_eq!(
             remove_abandoned(&scratch.0, now + ABANDONED + Duration::from_secs(60)),
             1
         );
-        assert!(!scratch.0.join("fotos/old.jpg.part").exists());
+        assert!(!scratch.0.join("fotos/old.jpg.mickey-part").exists());
         assert!(
             scratch.0.join("kept.jpg").exists(),
             "never what the owner brought"
+        );
+        assert!(
+            scratch.0.join("chapter.part").exists(),
+            "nor a file that only ends in .part"
         );
     }
 }

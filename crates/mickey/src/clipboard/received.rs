@@ -40,11 +40,10 @@ fn save_in(base: &Path, files: Vec<(String, Vec<u8>)>) -> Result<Vec<PathBuf>, S
     let mark = crate::fs::mark::Mark::configured("");
     let mut paths = Vec::new();
     for (name, bytes) in files {
-        let name = names::safe_name(&name)
-            .ok_or_else(|| format!("refused a file name from the network: {name:?}"))?;
+        let name = names::safe_name(&name).ok_or("refused a file name from the network")?;
         let path = folder.join(name);
         std::fs::write(&path, bytes)
-            .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
+            .map_err(|err| format!("cannot write a received file: {err}"))?;
         mark.put_on(&path);
         paths.push(path);
     }

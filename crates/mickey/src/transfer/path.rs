@@ -7,6 +7,12 @@ use std::path::PathBuf;
 
 /// The most folders deep a path may be.
 pub const MAX_DEPTH: usize = 64;
+/// What a file being received is called until it is checked: its name
+/// and this. A suffix of Mickey's own, so cleaning its leftovers never
+/// touches a real file that ends in `.part`, and refused in paths from the
+/// network, so another PC cannot pass a file off as one.
+pub const RECEIVING: &str = ".mickey-part";
+
 /// The longest path, in bytes: Windows refuses paths over 260 characters
 /// in all, and the folder files land in (`C:\Users\…\Downloads\Mickey`)
 /// takes some of them.
@@ -23,8 +29,11 @@ pub fn checked(text: &str) -> Result<PathBuf, String> {
         if depth == MAX_DEPTH {
             return Err(format!("a path more than {MAX_DEPTH} folders deep"));
         }
-        let part =
-            safe_name(part).ok_or_else(|| format!("refused a path from the network: {text:?}"))?;
+        // No name in the error: errors reach the log, where copied names
+        // never go.
+        let part = safe_name(part)
+            .filter(|part| !part.ends_with(RECEIVING))
+            .ok_or("refused a path from the network")?;
         path.push(part);
     }
     Ok(path)
@@ -55,6 +64,7 @@ mod tests {
             "a\\b",
             "C:/x",
             "a/CON",
+            "fotos/a.jpg.mickey-part",
         ] {
             assert!(checked(bad).is_err(), "{bad:?}");
         }
