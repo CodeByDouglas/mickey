@@ -6,7 +6,7 @@ use crate::clipboard::sync::DataLinks;
 use crate::monitors::Monitor;
 use crate::net::identity::Identity;
 use crate::net::latency::{self, Latency};
-use crate::net::protocol::Message;
+use crate::net::protocol::{Message, NotPairedWhy};
 use crate::net::secure::Link;
 use crate::net::transport;
 use crate::net::trust;
@@ -14,7 +14,7 @@ use crate::threads::LockAnyway;
 use mickey_config as config;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Instant;
 
@@ -128,19 +128,135 @@ pub(super) fn connect_and_pair(
 ) -> Result<Link, String> {
     let mut link = transport::connect(to, identity).map_err(|err| err.to_string())?;
     let peer_key = *link.peer_key();
-    let code = link.pairing_code();
-    let new = !trusted.lock_anyway().is_trusted(&peer_key);
-    if !trust::trust_or_ask(trusted, &peer_key, to, &code, name)? {
-        return Err("not paired; nothing was sent".into());
+    if trusted.lock_anyway().is_trusted(&peer_key) {
+        transport::hello(&mut link).map_err(|err| refusal(&err, false, name))?;
+        return Ok(link);
     }
-    println!("mickey: waiting for {name} to accept this PC");
-    transport::hello(&mut link).map_err(|err| refusal(&err, new, name))?;
+    // While this PC shows the code, the other PC may already say no (its
+    // pairing closed, say): its first message is read meanwhile, and closes
+    // the window, so a code never shows on one screen only (#420).
+    let first = first_message(&link)?;
+    let early = std::cell::RefCell::new(None);
+    let stopped = || {
+        if early.borrow().is_none()
+            && let Ok(got) = first.try_recv()
+        {
+            *early.borrow_mut() = Some(got);
+        }
+        early.borrow().is_some()
+    };
+    let code = link.pairing_code();
+    let answer = trust::trust_or_ask(trusted, &peer_key, to, &code, name, &stopped);
+    // Closing it also ends the thread waiting for the first message.
+    let stop = |link: &Link| {
+        let _ = link.shutdown();
+    };
+    // Only the person here pairs: when the other PC closed the window, what
+    // it said can only be a no, even if it reads as a yes (a Hello sent
+    // before this PC asked would otherwise pair without anyone's consent).
+    let consented = answer == Ok(trust::Answer::Paired);
+    match answer {
+        Ok(trust::Answer::Paired | trust::Answer::Stopped) => {}
+        Ok(trust::Answer::NotPaired(_)) => {
+            stop(&link);
+            return Err("not paired; nothing was sent".into());
+        }
+        Err(err) => {
+            stop(&link);
+            return Err(err);
+        }
+    }
+    let got = match early.into_inner() {
+        Some(got) => got,
+        None => {
+            println!("mickey: waiting for {name} to accept this PC");
+            transport::send_hello(&mut link).map_err(|err| err.to_string())?;
+            first
+                .recv_timeout(transport::PAIR_WAIT)
+                .unwrap_or_else(|_| {
+                    stop(&link);
+                    Err(std::io::ErrorKind::TimedOut.into())
+                })
+        }
+    };
+    let answered = answered(got, name, consented);
+    if let Err((why, word)) = &answered {
+        stop(&link);
+        tell_not_paired(name, why, word);
+    }
+    answered.map_err(|(why, _)| why)?;
     // Only now: had the other PC refused, this one would have trusted a PC
     // that never paired with it (#420).
-    if new {
-        trust::remember(trusted, &peer_key, to, name)?;
-    }
+    trust::remember(trusted, &peer_key, to, name)?;
     Ok(link)
+}
+
+/// What the first message from `name`, which this PC asked to pair with,
+/// means: paired, or why not, as the log says it and as a word for the
+/// window (`mickey-ui not-paired`), which puts it in the owner's language.
+/// Never paired unless the person here `consented`: an answer that came
+/// before (it closed the window) can only be a no.
+fn answered(
+    got: std::io::Result<Message>,
+    name: &str,
+    consented: bool,
+) -> Result<(), (String, &'static str)> {
+    match got {
+        Ok(Message::NotPaired { why }) => Err((not_paired(why, name), why_word(why))),
+        Ok(_) if !consented => Err((
+            format!("{name} answered before this PC paired"),
+            "no-answer",
+        )),
+        Ok(message) => transport::hello_answer(message).map_err(|err| (err.to_string(), "version")),
+        Err(err) => Err((refusal(&err, true, name), "no-answer")),
+    }
+}
+
+/// The first message `link`'s peer sends, read on a thread of its own.
+fn first_message(link: &Link) -> Result<mpsc::Receiver<std::io::Result<Message>>, String> {
+    let mut reader = link.try_clone().map_err(|err| err.to_string())?;
+    let (sent, first) = mpsc::channel();
+    crate::threads::spawn("pairing answer", move || {
+        let _ = sent.send(reader.recv());
+    });
+    Ok(first)
+}
+
+/// What to tell the person when `name` said it did not pair, and why.
+fn not_paired(why: NotPairedWhy, name: &str) -> String {
+    match why {
+        NotPairedWhy::Closed => {
+            format!("{name}'s pairing is closed: open it there (Settings → PCs), then try again")
+        }
+        NotPairedWhy::Busy => {
+            format!(
+                "{name} is answering another PC, or was asked a moment ago: try again in a minute"
+            )
+        }
+        NotPairedWhy::Declined => format!("{name} said no to pairing with this PC"),
+    }
+}
+
+/// The word `mickey-ui not-paired` turns into the owner's language.
+fn why_word(why: NotPairedWhy) -> &'static str {
+    match why {
+        NotPairedWhy::Closed => "closed",
+        NotPairedWhy::Busy => "busy",
+        NotPairedWhy::Declined => "declined",
+    }
+}
+
+/// Shows why pairing with `name` did not happen: `why` in the log, `word`
+/// for the window.
+fn tell_not_paired(name: &str, why: &str, word: &str) {
+    println!("mickey: not paired with {name}: {why}");
+    let shown =
+        crate::window::ui_command(&["not-paired", name, word]).and_then(|mut ui| ui.spawn());
+    if let Ok(mut window) = shown {
+        crate::threads::spawn("not paired", move || {
+            let _ = window.wait();
+        });
+    }
 }
 
 /// What to tell the person when `name` did not answer the handshake with
@@ -325,5 +441,41 @@ mod tests {
     fn other_errors_keep_their_own_words() {
         let text = refusal(&Error::other("target speaks protocol 9"), true, "Desk");
         assert_eq!(text, "target speaks protocol 9");
+    }
+
+    #[test]
+    fn the_first_answer_says_whether_and_why_not() {
+        let hello = Message::Hello {
+            version: crate::net::protocol::VERSION,
+        };
+        assert_eq!(answered(Ok(hello), "Desk", true), Ok(()));
+        let closed = Message::NotPaired {
+            why: NotPairedWhy::Closed,
+        };
+        let (why, word) = answered(Ok(closed), "Desk", true).unwrap_err();
+        assert_eq!(word, "closed");
+        assert!(why.contains("Desk's pairing is closed"), "{why}");
+        let declined = Message::NotPaired {
+            why: NotPairedWhy::Declined,
+        };
+        assert_eq!(
+            answered(Ok(declined), "Desk", true).unwrap_err().1,
+            "declined"
+        );
+        let gone = Error::from(std::io::ErrorKind::UnexpectedEof);
+        assert_eq!(
+            answered(Err(gone), "Desk", true).unwrap_err().1,
+            "no-answer"
+        );
+        let old = Message::Hello { version: 2 };
+        assert_eq!(answered(Ok(old), "Desk", true).unwrap_err().1, "version");
+    }
+
+    #[test]
+    fn a_hello_before_the_person_here_paired_is_not_a_yes() {
+        let hello = Message::Hello {
+            version: crate::net::protocol::VERSION,
+        };
+        assert!(answered(Ok(hello), "Desk", false).is_err());
     }
 }

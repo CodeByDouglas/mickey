@@ -23,7 +23,7 @@
 
 use crate::net::invalid;
 use crate::net::secure::Link;
-use crate::transfer::offer::{Entry, Kind, MAX_ENTRIES, Offer};
+use crate::transfer::offer::{self, Entry, Kind, MAX_ENTRIES, MAX_LEFT_OUT, Offer, Skipped};
 use crate::transfer::path;
 use std::collections::HashSet;
 use std::io;
@@ -109,6 +109,12 @@ pub fn encode(message: &Message) -> Vec<u8> {
                 if let Kind::File { size } = entry.kind {
                     out.extend_from_slice(&size.to_be_bytes());
                 }
+            }
+            out.extend_from_slice(&(offer.left_out.len() as u16).to_be_bytes());
+            for skipped in &offer.left_out {
+                out.push(left_out_code(skipped.why));
+                out.extend_from_slice(&(skipped.path.len() as u16).to_be_bytes());
+                out.extend_from_slice(skipped.path.as_bytes());
             }
             out
         }
@@ -197,7 +203,46 @@ fn offer(body: &mut Body) -> Result<Offer, String> {
         };
         entries.push(Entry { path, kind });
     }
-    Ok(Offer { id, entries })
+    let count = usize::from(body.u16()?);
+    if count > MAX_LEFT_OUT {
+        return Err(format!("{count} left-out names, more than {MAX_LEFT_OUT}"));
+    }
+    let mut left_out = Vec::new();
+    for _ in 0..count {
+        let why = left_out_why(body.u8()?)?;
+        let length = usize::from(body.u16()?);
+        // Only ever shown, never used as a path: any UTF-8 will do.
+        let path = std::str::from_utf8(body.take(length)?)
+            .map_err(|_| "a left-out name that is not UTF-8")?
+            .to_string();
+        left_out.push(Skipped { path, why });
+    }
+    Ok(Offer {
+        id,
+        entries,
+        left_out,
+    })
+}
+
+fn left_out_code(why: offer::Why) -> u8 {
+    match why {
+        offer::Why::Link => 0,
+        offer::Why::BadName => 1,
+        offer::Why::SameNameOtherCase => 2,
+        offer::Why::NotAFile => 3,
+        offer::Why::Unreadable => 4,
+    }
+}
+
+fn left_out_why(code: u8) -> Result<offer::Why, String> {
+    Ok(match code {
+        0 => offer::Why::Link,
+        1 => offer::Why::BadName,
+        2 => offer::Why::SameNameOtherCase,
+        3 => offer::Why::NotAFile,
+        4 => offer::Why::Unreadable,
+        _ => return Err(format!("unknown reason {code} to leave a file out")),
+    })
 }
 
 /// The bytes of a message not read yet.
@@ -249,6 +294,10 @@ mod tests {
                     kind,
                 })
                 .collect(),
+            left_out: vec![Skipped {
+                path: "fotos/atalho".into(),
+                why: offer::Why::Link,
+            }],
         }
     }
 

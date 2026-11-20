@@ -26,6 +26,9 @@ pub enum Ask {
     Join { by: String },
     /// Use the hotkeys a paired PC shared: what would change, one per line.
     Hotkeys { changes: String },
+    /// Not a question: the PC this one asked did not pair, and why (a word:
+    /// `closed`, `busy`, `declined`, `no-answer`, `version`). One button.
+    NotPaired { why: String },
 }
 
 struct Pair {
@@ -55,6 +58,11 @@ impl eframe::App for Pair {
                         i18n::tf("pair.use_hotkeys", &[("name", &self.who)]),
                         i18n::t("pair.use_them"),
                         i18n::t("pair.keep_mine"),
+                    ),
+                    Ask::NotPaired { .. } => (
+                        i18n::tf("pair.not_paired_with", &[("name", &self.who)]),
+                        i18n::t("pair.ok"),
+                        "",
                     ),
                 };
                 ui.label(
@@ -90,12 +98,32 @@ impl eframe::App for Pair {
                         ui.add_space(6.0);
                         ui.weak(i18n::t("pair.hotkeys_keep_own"));
                     }
+                    Ask::NotPaired { why } => {
+                        let text = match why.as_str() {
+                            "closed" => i18n::tf("pair.not_paired_closed", &[("name", &self.who)]),
+                            "busy" => i18n::t("pair.not_paired_busy").to_string(),
+                            "declined" => {
+                                i18n::tf("pair.not_paired_declined", &[("name", &self.who)])
+                            }
+                            "version" => i18n::t("pair.not_paired_version").to_string(),
+                            _ => i18n::tf("pair.not_paired_no_answer", &[("name", &self.who)]),
+                        };
+                        theme::card(ui, |ui| {
+                            ui.label(text);
+                        });
+                    }
                 }
                 ui.add_space(10.0);
+                let close =
+                    |ui: &egui::Ui| ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                if let Ask::NotPaired { .. } = self.ask {
+                    if ui.add(theme::primary(icon::CHECK, yes)).clicked() {
+                        close(ui);
+                    }
                 // Never on Enter: it must not pair, nor let a PC in.
-                if let Some(yes) = theme::yes_no(ui, yes, no) {
+                } else if let Some(yes) = theme::yes_no(ui, yes, no) {
                     self.answer.set(yes);
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    close(ui);
                 }
             });
         });

@@ -39,6 +39,10 @@ pub struct Form {
     pub bring_position: String,
     /// Over how many gigabytes files are asked about first.
     pub bring_over_gb: u64,
+    /// When Bring suggests cleaning `Downloads/Mickey`: over this many
+    /// gigabytes, or under this share of the disk free.
+    pub clean_over_gb: u64,
+    pub clean_below_percent: u64,
     /// The switcher as a column.
     pub vertical: bool,
     /// Keep a clipboard history here: always, never (another manager keeps
@@ -105,6 +109,8 @@ impl Form {
             position: config.interface.switcher_position.clone(),
             bring_position: config.interface.bring_position.clone(),
             bring_over_gb: config.interface.bring_over_gb,
+            clean_over_gb: config.interface.clean_over_gb,
+            clean_below_percent: config.interface.clean_below_percent,
             vertical: config.interface.switcher_vertical,
             history: config.clipboard.history,
             share: config.clipboard.share,
@@ -214,6 +220,18 @@ impl Form {
                 self.bring_over_gb
             );
         }
+        if self.clean_over_gb != config::Interface::default().clean_over_gb {
+            out += &format!(
+                "clean_over_gb = {}    # suggest cleaning Downloads/Mickey over this\n",
+                self.clean_over_gb
+            );
+        }
+        if self.clean_below_percent != config::Interface::default().clean_below_percent {
+            out += &format!(
+                "clean_below_percent = {}    # or under this share of the disk free\n",
+                self.clean_below_percent
+            );
+        }
         if !self.order.is_empty() {
             let names: Vec<String> = self
                 .order
@@ -300,7 +318,7 @@ mod tests {
     #[test]
     fn what_the_form_writes_parses_back_to_the_same_form() {
         let original = config::parse(
-            "[[peer]]\nname = \"Windows \\\"main\\\"\"\naddress = \"192.0.2.10:4242\"\nhotkey = \"AltGr+RightShift+1\"\nposition = [-1920, 0]\nkey = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n\n[hotkeys]\nhome = \"AltGr+RightShift+H\"\n\n[interface]\nswitcher_position = \"top-left\"\nbring_over_gb = 5\n\n[clipboard]\nhistory = false\nshare = \"off\"\n\n[updates]\ncheck = false\n\n[audio]\nlistener = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\nmode = \"both\"\n\n[this_pc]\ncontrolled = false\nshare_hotkeys = false\nname = \"Desk\"\n\n[touchpad]\nspeed = 30\nscroll_speed = 10\nforward = false\ntap = \"on\"\nnatural_scroll = \"off\"\n",
+            "[[peer]]\nname = \"Windows \\\"main\\\"\"\naddress = \"192.0.2.10:4242\"\nhotkey = \"AltGr+RightShift+1\"\nposition = [-1920, 0]\nkey = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n\n[hotkeys]\nhome = \"AltGr+RightShift+H\"\n\n[interface]\nswitcher_position = \"top-left\"\nbring_over_gb = 5\nclean_over_gb = 40\nclean_below_percent = 20\n\n[clipboard]\nhistory = false\nshare = \"off\"\n\n[updates]\ncheck = false\n\n[audio]\nlistener = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\nmode = \"both\"\n\n[this_pc]\ncontrolled = false\nshare_hotkeys = false\nname = \"Desk\"\n\n[touchpad]\nspeed = 30\nscroll_speed = 10\nforward = false\ntap = \"on\"\nnatural_scroll = \"off\"\n",
         )
         .unwrap();
         let form = Form::from_config(&original);

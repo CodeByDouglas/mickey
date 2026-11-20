@@ -145,6 +145,22 @@ impl Settings {
         });
         ui.weak(i18n::t("general.bring_over_hint"));
         ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(i18n::t("general.clean_over"));
+            ui.add(
+                egui::DragValue::new(&mut form.clean_over_gb)
+                    .range(0..=mickey_config::MAX_CLEAN_OVER_GB)
+                    .suffix(" GB"),
+            );
+            ui.label(i18n::t("general.clean_below"));
+            ui.add(
+                egui::DragValue::new(&mut form.clean_below_percent)
+                    .range(0..=mickey_config::MAX_CLEAN_BELOW_PERCENT)
+                    .suffix(" %"),
+            );
+        });
+        ui.weak(i18n::t("general.clean_hint"));
+        ui.add_space(8.0);
         ui.checkbox(&mut form.vertical, i18n::t("general.column"));
         ui.add_space(8.0);
         switcher_order(ui, form);

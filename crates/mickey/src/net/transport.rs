@@ -39,13 +39,23 @@ pub fn connect(addr: SocketAddr, identity: &Identity) -> io::Result<Link> {
 /// Says hello and waits for the target's hello, which it sends only once it
 /// trusts us. Until then nothing else is sent.
 pub fn hello(link: &mut Link) -> io::Result<()> {
-    link.send(&Message::Hello { version: VERSION })?;
+    send_hello(link)?;
     // The target may be showing its owner a pair window: give them time,
     // but not for ever (a frozen target would hold this up for good).
     link.set_read_timeout(Some(PAIR_WAIT))?;
     let answer = link.recv();
     link.set_read_timeout(None)?;
-    match answer? {
+    hello_answer(answer?)
+}
+
+/// The source's half of `hello`: says which protocol it speaks.
+pub fn send_hello(link: &mut Link) -> io::Result<()> {
+    link.send(&Message::Hello { version: VERSION })
+}
+
+/// Checks the target's answer to `send_hello`.
+pub fn hello_answer(answer: Message) -> io::Result<()> {
+    match answer {
         Message::Hello { version: VERSION } => Ok(()),
         Message::Hello { version } => Err(invalid(format!(
             "target speaks protocol {version}, this Mickey speaks {VERSION}"
@@ -55,7 +65,7 @@ pub fn hello(link: &mut Link) -> io::Result<()> {
 }
 
 /// How long a new PC's owner has to answer the pair window.
-const PAIR_WAIT: Duration = Duration::from_secs(90);
+pub const PAIR_WAIT: Duration = Duration::from_secs(90);
 
 /// How long a source may say nothing before the target gives up on it. A
 /// source pings every second, so only one that is gone (asleep, switched
@@ -344,6 +354,7 @@ pub fn serve(
             | Message::Monitors { .. }
             | Message::Leave { .. }
             | Message::Refused
+            | Message::NotPaired { .. }
             | Message::Picked { .. } => {}
             Message::Hello { .. } => break Err(invalid("second Hello".into())),
         }
