@@ -27,8 +27,19 @@ pub fn safe_name(name: &str) -> Option<&str> {
                 c,
                 '/' | '\\' | ':' | '\0' | '<' | '>' | '"' | '|' | '?' | '*'
             ) || c.is_control()
+                || hides_text(c)
         });
     (!bad).then_some(name)
+}
+
+/// Characters that change how a name reads without showing: direction
+/// marks and overrides, which make `photo\u{202E}gpj.exe` show as
+/// `photoexe.jpg`, and zero-width ones.
+fn hides_text(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+    )
 }
 
 #[cfg(test)]
@@ -67,6 +78,8 @@ mod tests {
             "CONIN$",
             "conout$.txt",
             "COM0",
+            "photo\u{202E}gpj.exe",
+            "a\u{200B}b",
         ] {
             assert_eq!(safe_name(bad), None, "{bad:?}");
         }

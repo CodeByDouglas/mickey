@@ -163,7 +163,7 @@ fn files(mut body: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         let name = std::str::from_utf8(take(name_len.into())?)
             .map_err(|_| "a file name that is not UTF-8")?;
         let name = crate::fs::names::safe_name(name)
-            .ok_or_else(|| format!("refused a file name from the network: {name:?}"))?
+            .ok_or("refused a file name from the network")?
             .to_string();
         let size = u64::from_be_bytes(take(8)?.try_into().map_err(|_| short())?);
         // Sizes come from the network: their sum must not wrap around.

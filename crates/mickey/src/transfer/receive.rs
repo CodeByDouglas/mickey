@@ -107,7 +107,7 @@ fn fetch_all(link: &mut Link, offer: &Offer, into: &Path, fetched: &mut Fetched)
         let (top, target) = &places[index];
         if !fetched.claimed.contains(top) {
             if top.symlink_metadata().is_ok() {
-                return Err(taken(top));
+                return Err(taken());
             }
             fetched.claimed.insert(top.clone());
         }
@@ -117,12 +117,13 @@ fn fetch_all(link: &mut Link, offer: &Offer, into: &Path, fetched: &mut Fetched)
             match fetch_file(link, offer.id, wire_index, size, kept, target, fetched) {
                 Ok(None) => {
                     fetched.summary.files += 1;
-                    fetched.summary.bytes += size;
+                    // Sizes come from the other PC: never past u64.
+                    fetched.summary.bytes = fetched.summary.bytes.saturating_add(size);
                 }
                 Ok(Some(why)) => {
                     // Dealt with: what it would have taken counts as done.
                     let mut progress = fetched.progress.lock_anyway();
-                    let done = progress.done + size - kept.unwrap_or(0);
+                    let done = progress.done.saturating_add(size - kept.unwrap_or(0));
                     progress.advance(done, std::time::Instant::now());
                     drop(progress);
                     fetched.summary.skipped.push((entry.path.clone(), why));
@@ -271,7 +272,7 @@ fn fetch_file(
     // replaced: renaming would.
     if target.symlink_metadata().is_ok() {
         let _ = std::fs::remove_file(&part);
-        return Err(taken(target));
+        return Err(taken());
     }
     fetched.mark.put_on(&part);
     std::fs::rename(&part, target)
@@ -350,10 +351,10 @@ fn free_name(path: &Path, is_file: bool, given: &[&Path]) -> PathBuf {
     candidate
 }
 
-/// `target` with `.part` added to its name.
+/// `target` while it is being received (`path::RECEIVING` added).
 fn part_of(target: &Path) -> PathBuf {
     let mut name = target.file_name().unwrap_or_default().to_os_string();
-    name.push(".part");
+    name.push(path::RECEIVING);
     target.with_file_name(name)
 }
 
@@ -372,10 +373,11 @@ fn recv(link: &mut Link) -> io::Result<Message> {
 }
 
 /// Something appeared at `path` while the transfer waited to write there.
-fn taken(path: &Path) -> io::Error {
+/// No name in it: errors reach the log, where copied names never go.
+fn taken() -> io::Error {
     io::Error::new(
         io::ErrorKind::AlreadyExists,
-        format!("{} appeared while the transfer waited", path.display()),
+        "something appeared at a file's name while the transfer waited",
     )
 }
 
@@ -501,7 +503,7 @@ mod tests {
         let scratch = Scratch::new("owners");
         scratch.file("notes.txt", b"new");
         scratch.file("my.project/a.txt", b"a");
-        std::fs::write(scratch.dest().join("notes.txt.part"), b"mine").unwrap();
+        std::fs::write(scratch.dest().join("notes.txt.mickey-part"), b"mine").unwrap();
         std::fs::create_dir(scratch.dest().join("my.project")).unwrap();
         let roots = [
             scratch.0.join("from/notes.txt"),
@@ -511,7 +513,10 @@ mod tests {
         let offer = listing.offer(7);
         let summary = transfer(listing, &offer, &scratch.dest()).unwrap();
         let dest = scratch.dest();
-        assert_eq!(std::fs::read(dest.join("notes.txt.part")).unwrap(), b"mine");
+        assert_eq!(
+            std::fs::read(dest.join("notes.txt.mickey-part")).unwrap(),
+            b"mine"
+        );
         assert_eq!(std::fs::read(dest.join("notes (2).txt")).unwrap(), b"new");
         assert_eq!(
             std::fs::read(dest.join("my.project (2)/a.txt")).unwrap(),
@@ -554,7 +559,9 @@ mod tests {
                 ("docs/goes.txt".to_string(), Why::Gone)
             ]
         );
-        assert!(!docs.join("changes.txt").exists() && !docs.join("changes.txt.part").exists());
+        assert!(
+            !docs.join("changes.txt").exists() && !docs.join("changes.txt.mickey-part").exists()
+        );
         assert_eq!(std::fs::read(docs.join("stays.txt")).unwrap(), b"same");
     }
 
@@ -601,7 +608,7 @@ mod tests {
         assert_eq!(offer.entries[1].path, "docs/big.bin");
         assert!(fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).is_err());
         breaking.join().unwrap();
-        let part = scratch.dest().join("docs/big.bin.part");
+        let part = scratch.dest().join("docs/big.bin.mickey-part");
         assert_eq!(std::fs::metadata(&part).unwrap().len(), 300_000, "kept");
         {
             let progress = fetched.progress.lock_anyway();
@@ -665,7 +672,7 @@ mod tests {
         let mut fetched = Fetched::default();
         break_at_once(&offer, &scratch.dest(), &mut fetched);
         assert!(
-            scratch.dest().join("a.txt.part").is_file(),
+            scratch.dest().join("a.txt.mickey-part").is_file(),
             "an empty .part"
         );
         let (mut fetching, mut serving) = link_pair();
@@ -700,7 +707,7 @@ mod tests {
             std::fs::read(scratch.dest().join("a.txt")).unwrap(),
             b"the owner's"
         );
-        assert!(!scratch.dest().join("a.txt.part").exists());
+        assert!(!scratch.dest().join("a.txt.mickey-part").exists());
     }
 
     #[test]

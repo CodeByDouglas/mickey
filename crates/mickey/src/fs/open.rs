@@ -28,10 +28,8 @@ fn open(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     std::os::windows::fs::OpenOptionsExt::custom_flags(options, FILE_FLAG_OPEN_REPARSE_POINT);
     let file = options.open(path)?;
     if !file.metadata()?.is_file() {
-        return Err(io::Error::other(format!(
-            "{} is not a plain file",
-            path.display()
-        )));
+        // No name: errors reach the log, where copied names never go.
+        return Err(io::Error::other("not a plain file"));
     }
     Ok(file)
 }
