@@ -439,7 +439,7 @@ mod tests {
         (ours.unwrap(), theirs.join().unwrap())
     }
 
-    /// What `send::serve` finds for a PC that handed out only `listing`, as
+    /// What `send::answer_fetches` finds for a PC that handed out only `listing`, as
     /// offer `id`.
     fn only(listing: Listing, id: u64) -> impl Fn(u64) -> Option<std::sync::Arc<Listing>> {
         let listing = std::sync::Arc::new(listing);
@@ -450,7 +450,7 @@ mod tests {
     fn transfer(listing: Listing, offer: &Offer, into: &Path) -> io::Result<Summary> {
         let (mut fetching, mut serving) = link_pair();
         let id = offer.id;
-        let server = thread::spawn(move || send::serve(&mut serving, only(listing, id)));
+        let server = thread::spawn(move || send::answer_fetches(&mut serving, only(listing, id)));
         let mut fetched = Fetched::default();
         let result = fetch(&mut fetching, offer, into, &mut fetched);
         drop(fetching);
@@ -618,7 +618,8 @@ mod tests {
         // The second attempt asks only for the rest (starting over would
         // fail: a new `.part` must not exist yet), and checks the whole.
         let (mut fetching, mut serving) = link_pair();
-        let server = thread::spawn(move || send::serve(&mut serving, only(listing, id)).unwrap());
+        let server =
+            thread::spawn(move || send::answer_fetches(&mut serving, only(listing, id)).unwrap());
         fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).unwrap();
         drop(fetching);
         server.join().unwrap();
@@ -677,7 +678,8 @@ mod tests {
         );
         let (mut fetching, mut serving) = link_pair();
         let id = offer.id;
-        let server = thread::spawn(move || send::serve(&mut serving, only(listing, id)).unwrap());
+        let server =
+            thread::spawn(move || send::answer_fetches(&mut serving, only(listing, id)).unwrap());
         fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).unwrap();
         drop(fetching);
         server.join().unwrap();
@@ -698,7 +700,8 @@ mod tests {
         std::fs::write(scratch.dest().join("a.txt"), b"the owner's").unwrap();
         let (mut fetching, mut serving) = link_pair();
         let id = offer.id;
-        let server = thread::spawn(move || send::serve(&mut serving, only(listing, id)).unwrap());
+        let server =
+            thread::spawn(move || send::answer_fetches(&mut serving, only(listing, id)).unwrap());
         let err = fetch(&mut fetching, &offer, &scratch.dest(), &mut fetched).unwrap_err();
         drop(fetching);
         server.join().unwrap();

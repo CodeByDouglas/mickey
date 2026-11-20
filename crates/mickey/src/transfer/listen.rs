@@ -20,10 +20,10 @@ use std::sync::{Arc, Mutex};
 pub const MAX_PER_PC: usize = 2;
 
 /// Serves the offers this PC hands out (`offers`) to paired PCs, on the
-/// transfer port for `listen`, for as long as Mickey runs. A PC that
+/// transfer port for `listen_on`, for as long as Mickey runs. A PC that
 /// cannot listen there only misses file transfers.
 pub fn start(
-    listen: SocketAddr,
+    listen_on: SocketAddr,
     identity: Arc<Identity>,
     trusted: trust::Shared,
     offers: Arc<Offers>,
@@ -31,26 +31,26 @@ pub fn start(
     let is_trusted = move |key: &[u8; 32]| trusted.lock_anyway().is_trusted(key);
     let answer = move |mut link: Link| {
         let find = |id| offers.find(id);
-        if let Err(err) = crate::transfer::send::serve(&mut link, find) {
+        if let Err(err) = crate::transfer::send::answer_fetches(&mut link, find) {
             eprintln!("mickey: a transfer ended: {err}");
         }
     };
-    if let Err(err) = serve(listen, identity, is_trusted, answer) {
-        let port = transport::transfer_address(listen).port();
+    if let Err(err) = listen(listen_on, identity, is_trusted, answer) {
+        let port = transport::transfer_address(listen_on).port();
         eprintln!("mickey: no file transfers: cannot listen on TCP {port}: {err}");
     }
 }
 
-/// Listens for transfers on the port for `listen` (the input link's) and
+/// Listens for transfers on the port for `on` (the input link's) and
 /// hands each paired PC's link to `handle`, on its own thread. Returns once
 /// it listens; the listening goes on for as long as Mickey runs.
-pub fn serve(
-    listen: SocketAddr,
+pub fn listen(
+    on: SocketAddr,
     identity: Arc<Identity>,
     trusted: impl Fn(&[u8; 32]) -> bool + Clone + Send + 'static,
     handle: impl Fn(Link) + Clone + Send + 'static,
 ) -> std::io::Result<()> {
-    let listener = TcpListener::bind(transport::transfer_address(listen))?;
+    let listener = TcpListener::bind(transport::transfer_address(on))?;
     crate::threads::spawn("transfer accept", move || {
         let slots = SharedSlots::default();
         let refused_said = Mutex::new(None);
@@ -98,11 +98,11 @@ mod tests {
     /// Serves on a free port; each link is held until the test ends, and
     /// its peer's key sent on `got`.
     fn serving(trust: bool) -> (SocketAddr, mpsc::Receiver<[u8; 32]>) {
-        let listen = free_input_port();
+        let on = free_input_port();
         let (got, links) = mpsc::channel();
         let identity = Arc::new(Identity::generate().unwrap());
-        serve(
-            listen,
+        listen(
+            on,
             identity,
             move |_| trust,
             move |link: Link| {
@@ -111,7 +111,7 @@ mod tests {
             },
         )
         .unwrap();
-        (listen, links)
+        (on, links)
     }
 
     #[test]

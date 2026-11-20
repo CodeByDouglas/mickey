@@ -403,7 +403,7 @@ fn run_from_config() -> Result<(), String> {
     // Other PCs fetch the files copied here (PRD 0015), whether this PC
     // controls others, is controlled, or both.
     let offers = std::sync::Arc::new(crate::transfer::offers::Offers::default());
-    crate::transfer::serve::start(
+    crate::transfer::listen::start(
         this_pc.listen,
         identity.clone(),
         trusted.clone(),
