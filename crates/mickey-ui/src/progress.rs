@@ -5,9 +5,13 @@
 //!
 //! ```text
 //! <stage>  <done bytes>  <total bytes>  <bytes a second>  <seconds left>
+//! skipped  <why>         <name>
 //! done     <files>       <bytes>        <folder>
 //! failed   <why>
 //! ```
+//!
+//! `skipped` lines (one per file the other PC did not send: `changed` or
+//! `gone` there) come before `done`, which lists them.
 //!
 //! The stage is `queued`, `space`, `rereading`, `transferring` or `paused`; speed and
 //! time left may be empty while not known. Cancel prints `cancel` and
@@ -36,19 +40,35 @@ enum State {
         files: u64,
         bytes: u64,
         folder: String,
+        /// Files not sent: why (`changed`, `gone`) and the name.
+        skipped: Vec<(String, String)>,
     },
     Failed(String),
 }
 
+/// A line from `mickey`: how the transfer is now, or one skipped file.
+#[derive(Debug, PartialEq)]
+enum Line {
+    State(State),
+    Skipped { why: String, name: String },
+}
+
 /// One line from `mickey`; `None` for one it does not understand.
-fn parse(line: &str) -> Option<State> {
+fn parse(line: &str) -> Option<Line> {
     // Only the line's end: trailing tabs are empty fields.
     let fields: Vec<&str> = line.trim_end_matches(['\n', '\r']).split('\t').collect();
-    Some(match fields.as_slice() {
+    Some(Line::State(match fields.as_slice() {
+        ["skipped", why, name] => {
+            return Some(Line::Skipped {
+                why: why.to_string(),
+                name: name.to_string(),
+            });
+        }
         ["done", files, bytes, folder] => State::Done {
             files: files.parse().ok()?,
             bytes: bytes.parse().ok()?,
             folder: folder.to_string(),
+            skipped: Vec::new(),
         },
         ["failed", why] => State::Failed(why.to_string()),
         [stage, done, total, speed, left] => State::Going {
@@ -59,7 +79,7 @@ fn parse(line: &str) -> Option<State> {
             left: left.parse().ok(),
         },
         _ => return None,
-    })
+    }))
 }
 
 struct Progress {
@@ -149,6 +169,7 @@ impl eframe::App for Progress {
                     files,
                     bytes,
                     folder,
+                    skipped,
                 } => {
                     ui.label(i18n::tf(
                         "progress.done",
@@ -158,6 +179,22 @@ impl eframe::App for Progress {
                         ],
                     ));
                     ui.weak(folder.as_str());
+                    if !skipped.is_empty() {
+                        ui.add_space(4.0);
+                        let count = skipped.len().to_string();
+                        ui.label(i18n::tf("progress.skipped", &[("count", &count)]));
+                        egui::ScrollArea::vertical()
+                            .max_height(90.0)
+                            .show(ui, |ui| {
+                                for (why, name) in skipped {
+                                    let why = match why.as_str() {
+                                        "changed" => i18n::t("progress.skipped_changed"),
+                                        _ => i18n::t("progress.skipped_gone"),
+                                    };
+                                    ui.weak(format!("{name}  ({why})"));
+                                }
+                            });
+                    }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui
@@ -237,8 +274,29 @@ pub fn window(who: &str) -> ExitCode {
             // Reads `mickey`'s lines on a thread, waking the window for each.
             let (ctx, reading) = (creation.egui_ctx.clone(), window_state.clone());
             std::thread::spawn(move || {
+                // Skipped files come before `done`, which lists them.
+                let mut skipped = Vec::new();
                 for line in std::io::stdin().lock().lines().map_while(Result::ok) {
-                    if let (Some(new), Ok(mut state)) = (parse(&line), reading.lock()) {
+                    let new = match parse(&line) {
+                        Some(Line::Skipped { why, name }) => {
+                            skipped.push((why, name));
+                            continue;
+                        }
+                        Some(Line::State(State::Done {
+                            files,
+                            bytes,
+                            folder,
+                            ..
+                        })) => State::Done {
+                            files,
+                            bytes,
+                            folder,
+                            skipped: std::mem::take(&mut skipped),
+                        },
+                        Some(Line::State(new)) => new,
+                        None => continue,
+                    };
+                    if let Ok(mut state) = reading.lock() {
                         *state = new;
                     }
                     ctx.request_repaint();
@@ -268,8 +326,12 @@ mod tests {
 
     #[test]
     fn mickeys_lines_are_read() {
+        let state = |line| match parse(line) {
+            Some(Line::State(state)) => Some(state),
+            _ => None,
+        };
         assert_eq!(
-            parse("transferring\t500\t1000\t25000000\t20\n"),
+            state("transferring\t500\t1000\t25000000\t20\n"),
             Some(State::Going {
                 stage: "transferring".into(),
                 done: 500,
@@ -279,7 +341,7 @@ mod tests {
             })
         );
         assert_eq!(
-            parse("space\t0\t1000\t\t"),
+            state("space\t0\t1000\t\t"),
             Some(State::Going {
                 stage: "space".into(),
                 done: 0,
@@ -289,18 +351,26 @@ mod tests {
             })
         );
         assert_eq!(
-            parse("done\t3\t1300000000\t/home/ana/Downloads/Mickey"),
+            state("done\t3\t1300000000\t/home/ana/Downloads/Mickey"),
             Some(State::Done {
                 files: 3,
                 bytes: 1_300_000_000,
                 folder: "/home/ana/Downloads/Mickey".into(),
+                skipped: Vec::new(),
             })
         );
         assert_eq!(
-            parse("failed\tno room"),
+            parse("skipped\tchanged\tfotos/a.jpg"),
+            Some(Line::Skipped {
+                why: "changed".into(),
+                name: "fotos/a.jpg".into(),
+            })
+        );
+        assert_eq!(
+            state("failed\tno room"),
             Some(State::Failed("no room".into()))
         );
-        assert_eq!(parse("transferring\tmany\t1\t\t"), None);
-        assert_eq!(parse(""), None);
+        assert_eq!(state("transferring\tmany\t1\t\t"), None);
+        assert_eq!(state(""), None);
     }
 }

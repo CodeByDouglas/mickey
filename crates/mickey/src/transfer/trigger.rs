@@ -187,6 +187,7 @@ impl Transfers {
                 files: fetched.summary.files,
                 bytes: fetched.summary.bytes,
                 folder: into.display().to_string(),
+                skipped: fetched.summary.skipped.clone(),
             },
             Err(err) => Ended::Failed(err.clone()),
         });

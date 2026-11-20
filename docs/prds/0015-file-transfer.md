@@ -277,9 +277,9 @@ own files:
 - [x] Bring / Ignore above a configurable threshold. *(`[interface] bring_over_gb`, 1 by default, in Settings > General next to where the question appears; decimal gigabytes, as the windows show sizes.)*
 - [x] Automatic fetches in the cache; brought ones in `Downloads/Mickey`.
 - [x] Free space checked before and during; the disk never fills.
-- [ ] Every file verified with BLAKE3; summary with counts and skips. *(Verified, and the window shows counts; skipped files are only counted in the log, #502.)*
+- [ ] Every file verified with BLAKE3; summary with counts and skips. *(Verified; the Done window shows counts and lists files skipped because they changed or went on the other PC. Files the offering PC left out of the offer (links, names Windows refuses) are still only counted in its log: the receiving PC never learns their names.)*
 - [ ] Resume at the exact byte. *(Built and tested in `receive`, #475; the trigger starts every fetch afresh, so it is not used yet, #502.)*
-- [ ] Changed and deleted source files handled and reported. *(Handled: skipped, never sent half right; not shown to the owner yet, #502.)*
+- [x] Changed and deleted source files handled and reported. *(Skipped, never sent half right, and listed by name in the Done window, never in the log.)*
 - [x] Links never followed; unsafe names skipped. *(Listing them to the owner: #502.)*
 - [ ] Progress window with real stages, a queue, Cancel, minimizable. *(Stages, Cancel and the queue work; a queued transfer shows nothing while it waits, and the window is not minimizable, #502.)*
 - [x] The clipboard keeps working during a transfer.
