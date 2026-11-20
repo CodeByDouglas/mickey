@@ -24,6 +24,13 @@ pub struct Interface {
     /// (PRD 0015); `0` asks every time.
     #[serde(default = "default_bring_over_gb")]
     pub bring_over_gb: u64,
+    /// Bring suggests cleaning `Downloads/Mickey` when it holds more than
+    /// this many gigabytes...
+    #[serde(default = "default_clean_over_gb")]
+    pub clean_over_gb: u64,
+    /// ...or when less than this share of the disk would be left free.
+    #[serde(default = "default_clean_below_percent")]
+    pub clean_below_percent: u64,
     /// The language of Mickey's windows and tray menu: `auto` (the
     /// system's), or a code from `i18n::Lang::ALL` such as `en`, `pt-BR`, `pt-PT`.
     #[serde(default = "default_language")]
@@ -38,6 +45,8 @@ impl Default for Interface {
             switcher_order: Vec::new(),
             bring_position: default_bring_position(),
             bring_over_gb: default_bring_over_gb(),
+            clean_over_gb: default_clean_over_gb(),
+            clean_below_percent: default_clean_below_percent(),
             language: default_language(),
         }
     }
@@ -97,6 +106,14 @@ fn default_bring_position() -> String {
 
 fn default_bring_over_gb() -> u64 {
     1
+}
+
+fn default_clean_over_gb() -> u64 {
+    10
+}
+
+fn default_clean_below_percent() -> u64 {
+    10
 }
 
 fn default_switcher_position() -> String {

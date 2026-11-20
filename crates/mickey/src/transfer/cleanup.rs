@@ -1,46 +1,90 @@
 //! Keeping `Downloads/Mickey` from growing for ever (PRD 0015, #479).
 //!
 //! Mickey never deletes what the owner brought: the Bring question only
-//! says the folder is worth cleaning when it is big or the disk runs low.
-//! What Mickey does delete is its own leftovers: a file it was receiving
-//! that nobody resumed for a week.
+//! says the folder is worth cleaning when it is big or the disk runs low,
+//! with how old each thing in it is. What Mickey does delete is its own
+//! leftovers: a file it was receiving that nobody resumed for a week.
 
 use crate::platform::space::Space;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-/// Above this, the folder is worth a look.
-pub const BIG_FOLDER: u64 = 10_000_000_000;
-/// Below this share of the disk free, after a transfer, it is too.
-pub const LOW_FREE_PERCENT: u64 = 10;
 /// A file being received, untouched this long, was abandoned.
 pub const ABANDONED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Whether a folder holding `held` bytes is worth cleaning before
-/// `incoming` more arrive on a disk with `space`: it holds more than
-/// `BIG_FOLDER`, or less than `LOW_FREE_PERCENT` of the disk would be left.
-pub fn worth_cleaning(held: u64, incoming: u64, space: Space) -> bool {
-    let left = space.available.saturating_sub(incoming);
-    held > BIG_FOLDER || left < space.total / 100 * LOW_FREE_PERCENT
+/// When the folder is worth cleaning (`[interface] clean_over_gb` and
+/// `clean_below_percent`).
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    /// Holding more than this many bytes.
+    pub over: u64,
+    /// Less than this share of the disk free after the transfer.
+    pub below_percent: u64,
 }
 
-/// What `folder` holds, in bytes, links never followed.
-pub fn held(folder: &Path) -> u64 {
+/// Whether a folder holding `held` bytes is worth cleaning before
+/// `incoming` more arrive on a disk with `space`.
+pub fn worth_cleaning(held: u64, incoming: u64, space: Space, limits: Limits) -> bool {
+    let left = space.available.saturating_sub(incoming);
+    held > limits.over || left < space.total / 100 * limits.below_percent
+}
+
+/// One thing at the top of the folder, as the suggestion shows it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Item {
+    pub name: String,
+    pub bytes: u64,
+    /// When it arrived: when it was made here (or, where the system does
+    /// not keep that, last changed).
+    pub arrived: SystemTime,
+    /// The last change to it or anything inside.
+    pub changed: SystemTime,
+    /// A transfer into it broke and has not gone on yet.
+    pub incomplete: bool,
+}
+
+/// What is at the top of `folder`, biggest first; links never followed.
+pub fn look(folder: &Path) -> Vec<Item> {
     let Ok(read) = std::fs::read_dir(folder) else {
-        return 0;
+        return Vec::new();
     };
-    read.flatten()
+    let mut items: Vec<Item> = read
+        .flatten()
         .filter_map(|entry| {
             let metadata = std::fs::symlink_metadata(entry.path()).ok()?;
-            Some(if metadata.is_dir() {
-                held(&entry.path())
-            } else if metadata.is_file() {
-                metadata.len()
-            } else {
-                0
-            })
+            let made = metadata.created().or_else(|_| metadata.modified()).ok()?;
+            let mut item = Item {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                bytes: 0,
+                arrived: made,
+                changed: metadata.modified().unwrap_or(made),
+                incomplete: false,
+            };
+            measure(&entry.path(), &metadata, &mut item);
+            Some(item)
         })
-        .fold(0, u64::saturating_add)
+        .collect();
+    items.sort_by_key(|item| std::cmp::Reverse(item.bytes));
+    items
+}
+
+/// Adds `path` (with its `metadata`), and what is inside, to `item`.
+fn measure(path: &Path, metadata: &std::fs::Metadata, item: &mut Item) {
+    if let Ok(modified) = metadata.modified() {
+        item.changed = item.changed.max(modified);
+    }
+    if metadata.is_file() {
+        item.bytes = item.bytes.saturating_add(metadata.len());
+        item.incomplete |= is_part(path);
+    } else if metadata.is_dir()
+        && let Ok(read) = std::fs::read_dir(path)
+    {
+        for entry in read.flatten() {
+            if let Ok(inner) = std::fs::symlink_metadata(entry.path()) {
+                measure(&entry.path(), &inner, item);
+            }
+        }
+    }
 }
 
 /// Removes the files being received under `folder` untouched for
@@ -84,6 +128,10 @@ mod tests {
     use crate::test_util::Scratch;
 
     const GB: u64 = 1_000_000_000;
+    const LIMITS: Limits = Limits {
+        over: 10 * GB,
+        below_percent: 10,
+    };
 
     #[test]
     fn a_big_folder_or_a_low_disk_is_worth_cleaning() {
@@ -91,23 +139,46 @@ mod tests {
             available: 500 * GB,
             total: 1000 * GB,
         };
-        assert!(!worth_cleaning(GB, GB, roomy));
-        assert!(worth_cleaning(13 * GB, 0, roomy), "over 10 GB");
+        assert!(!worth_cleaning(GB, GB, roomy, LIMITS));
+        assert!(worth_cleaning(13 * GB, 0, roomy, LIMITS), "over 10 GB");
         let low = Space {
             available: 120 * GB,
             total: 1000 * GB,
         };
-        assert!(worth_cleaning(0, 30 * GB, low), "90 GB of 1000 left");
-        assert!(!worth_cleaning(0, 10 * GB, low), "110 GB left");
+        assert!(
+            worth_cleaning(0, 30 * GB, low, LIMITS),
+            "90 GB of 1000 left"
+        );
+        assert!(!worth_cleaning(0, 10 * GB, low, LIMITS), "110 GB left");
+        let stricter = Limits {
+            over: 50 * GB,
+            below_percent: 15,
+        };
+        assert!(worth_cleaning(0, 10 * GB, low, stricter), "under 15% left");
+        assert!(!worth_cleaning(13 * GB, 0, roomy, stricter), "under 50 GB");
     }
 
     #[test]
-    fn a_folder_holds_what_is_in_it() {
-        let scratch = Scratch::new("held");
+    fn each_thing_in_the_folder_is_measured_biggest_first() {
+        let scratch = Scratch::new("look");
         scratch.file("fotos/a.jpg", &[0; 100]);
         scratch.file("fotos/2026/b.jpg", &[0; 50]);
         scratch.file("notes.txt", &[0; 3]);
-        assert_eq!(held(&scratch.0), 153);
+        scratch.file("video/v.mp4.mickey-part", &[0; 7]);
+        let items = look(&scratch.0);
+        let summary: Vec<(&str, u64, bool)> = items
+            .iter()
+            .map(|item| (item.name.as_str(), item.bytes, item.incomplete))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("fotos", 150, false),
+                ("video", 7, true),
+                ("notes.txt", 3, false)
+            ]
+        );
+        assert!(items.iter().all(|item| item.changed >= item.arrived));
     }
 
     #[test]
