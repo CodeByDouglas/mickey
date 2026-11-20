@@ -154,14 +154,17 @@ enum Fetch {
         into: PathBuf,
         fetched: Box<Fetched>,
     },
-    /// All there.
-    Done,
+    /// All there: where its top-level files and folders landed.
+    Done(Vec<PathBuf>),
 }
 
 /// What to do with an offer that arrives.
 enum Begin {
-    /// Nothing: it is being fetched, or it is all here.
+    /// Nothing: it is being fetched.
     Skip,
+    /// It is all here already, at these paths: pasted again, not fetched
+    /// again (copied again on the other PC, or crossing again).
+    Here(Vec<PathBuf>),
     /// Go on with it, into the same folder.
     Resume(PathBuf, Box<Fetched>),
     /// Fetch it for the first time.
@@ -170,11 +173,16 @@ enum Begin {
 
 impl Fetches {
     /// Says what to do with offer `key`, and marks it as being fetched
-    /// unless it is to be skipped.
+    /// unless it is running or here already. Files deleted since they
+    /// arrived are fetched again.
     fn begin(&self, key: ([u8; 32], u64)) -> Begin {
         let mut fetches = self.0.lock_anyway();
-        if matches!(fetches.get(&key), Some(Fetch::Running | Fetch::Done)) {
-            return Begin::Skip;
+        match fetches.get(&key) {
+            Some(Fetch::Running) => return Begin::Skip,
+            Some(Fetch::Done(landed)) if landed.iter().all(|path| path.exists()) => {
+                return Begin::Here(landed.clone());
+            }
+            _ => {}
         }
         match fetches.insert(key, Fetch::Running) {
             Some(Fetch::Broken { into, fetched }) => Begin::Resume(into, fetched),
@@ -183,9 +191,9 @@ impl Fetches {
     }
 
     /// Records how the fetch of `key` ended: what a broken one had done.
-    fn end(&self, key: ([u8; 32], u64), ended: Result<(), (PathBuf, Box<Fetched>)>) {
+    fn end(&self, key: ([u8; 32], u64), ended: Result<Vec<PathBuf>, (PathBuf, Box<Fetched>)>) {
         let fetch = match ended {
-            Ok(()) => Fetch::Done,
+            Ok(landed) => Fetch::Done(landed),
             Err((into, fetched)) => Fetch::Broken { into, fetched },
         };
         self.0.lock_anyway().insert(key, fetch);
@@ -266,6 +274,7 @@ impl Transfers {
             let who = crate::target::data::peer_name(offer.ip.unwrap_or(from));
             let (into, mut fetched) = match this.fetches.begin(key) {
                 Begin::Skip => return,
+                Begin::Here(landed) => return keeper.write(Content::Files(landed)),
                 Begin::Resume(into, fetched) => (into, *fetched),
                 Begin::Start => match this.landing(&offer, &who) {
                     Ok(Some(into)) => {
@@ -297,7 +306,7 @@ impl Transfers {
                 ),
             }
             let broken = |_| (into, Box::new(fetched));
-            this.fetches.end(key, result.map(|_| ()).map_err(broken));
+            this.fetches.end(key, result.map_err(broken));
         });
     }
 
@@ -545,20 +554,15 @@ mod tests {
             (into, fetched.summary.files),
             (PathBuf::from("/somewhere"), 7)
         );
-        fetches.end(key, Ok(()));
-        assert!(
-            matches!(fetches.begin(key), Begin::Skip),
-            "all here already"
-        );
-        assert!(
-            matches!(fetches.begin(([5; 32], 43)), Begin::Start),
-            "another offer"
-        );
-        fetches.forget(([5; 32], 43));
-        assert!(
-            matches!(fetches.begin(([5; 32], 43)), Begin::Start),
-            "forgotten"
-        );
+        // All here: pasted again, not fetched again; fetched again once
+        // the files are gone.
+        let here = std::env::temp_dir();
+        fetches.end(key, Ok(vec![here.clone()]));
+        assert!(matches!(fetches.begin(key), Begin::Here(landed) if landed == [here]));
+        fetches.end(key, Ok(vec![PathBuf::from("/no/such/file/for/mickey")]));
+        assert!(matches!(fetches.begin(key), Begin::Start), "deleted since");
+        fetches.forget(key);
+        assert!(matches!(fetches.begin(key), Begin::Start), "forgotten");
     }
 
     #[test]
