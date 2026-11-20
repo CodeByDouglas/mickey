@@ -274,7 +274,7 @@ own files:
 ## Requirements
 
 - [x] Folders and files of any size cross with copy and paste (at most 100 000 entries per copy).
-- [ ] Bring / Ignore above a configurable threshold. *(Bring / Ignore works over 1 GB, and where it appears is configurable; the 1 GB itself is not yet, #502.)*
+- [x] Bring / Ignore above a configurable threshold. *(`[interface] bring_over_gb`, 1 by default, in Settings > General next to where the question appears; decimal gigabytes, as the windows show sizes.)*
 - [x] Automatic fetches in the cache; brought ones in `Downloads/Mickey`.
 - [x] Free space checked before and during; the disk never fills.
 - [ ] Every file verified with BLAKE3; summary with counts and skips. *(Verified, and the window shows counts; skipped files are only counted in the log, #502.)*

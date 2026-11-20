@@ -1,5 +1,5 @@
 //! `mickey-ui bring <who> <bytes> <what>`: asks whether to bring files
-//! `who` offered, over 1 GB (PRD 0015); `<what>` is one line per copied
+//! `who` offered, over `[interface] bring_over_gb` (PRD 0015); `<what>` is one line per copied
 //! file or folder. Bring (or Enter) exits 0; Ignore, Esc or closing, 1.
 //!
 //! It is a notice about files arriving, so it appears where the owner

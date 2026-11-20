@@ -220,11 +220,11 @@ impl Transfers {
     }
 
     /// Where `offer`'s files go: a fresh folder among the received ones; or,
-    /// over `bring::ASK_OVER`, `Downloads/Mickey` if the owner says Bring, and
+    /// over `bring::ask_over()`, `Downloads/Mickey` if the owner says Bring, and
     /// `None` if they say Ignore.
     fn landing(&self, offer: &FileOffer, who: &str) -> Result<Option<PathBuf>, String> {
         let size = bring::total(&offer.offer);
-        if size <= bring::ASK_OVER {
+        if size <= bring::ask_over() {
             let waiting = self.fetches.waiting();
             return crate::clipboard::received::new_folder(&self.received, &waiting).map(Some);
         }

@@ -302,6 +302,10 @@ fn default_scroll_speed() -> i32 {
 
 /// The PC at `ip`, named as config.toml knows it; its address if
 /// config.toml does not list it, or cannot be read.
+/// The most `[interface] bring_over_gb` may be: past this, nothing would
+/// ever be asked about.
+pub const MAX_BRING_OVER_GB: u64 = 1000;
+
 pub fn peer_name_or_address(ip: std::net::IpAddr) -> String {
     Config::load()
         .ok()
@@ -382,6 +386,12 @@ pub fn parse(text: &str) -> Result<Config, String> {
     {
         return Err(format!(
             "this PC's name {name:?} must be 1 to 64 bytes, without tabs or line breaks"
+        ));
+    }
+    if config.interface.bring_over_gb > MAX_BRING_OVER_GB {
+        return Err(format!(
+            "bring_over_gb {} is more than {MAX_BRING_OVER_GB}",
+            config.interface.bring_over_gb
         ));
     }
     if !SWITCHER_POSITIONS.contains(&config.interface.bring_position.as_str()) {
@@ -733,6 +743,7 @@ mod tests {
         assert!(parse("[[peer]\n").is_err());
         assert!(parse("[interface]\nswitcher_position = \"middle\"\n").is_err());
         assert!(parse("[interface]\nbring_position = \"middle\"\n").is_err());
+        assert!(parse("[interface]\nbring_over_gb = 100000\n").is_err());
         assert!(parse("[[peer]]\nname = \"a\\tb\"\naddress = \"192.0.2.10:1\"\n").is_err());
     }
 

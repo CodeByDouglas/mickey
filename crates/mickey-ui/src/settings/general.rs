@@ -135,6 +135,16 @@ impl Settings {
             });
         ui.weak(i18n::t("general.bring_position_hint"));
         ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(i18n::t("general.bring_over"));
+            ui.add(
+                egui::DragValue::new(&mut form.bring_over_gb)
+                    .range(0..=mickey_config::MAX_BRING_OVER_GB)
+                    .suffix(" GB"),
+            );
+        });
+        ui.weak(i18n::t("general.bring_over_hint"));
+        ui.add_space(8.0);
         ui.checkbox(&mut form.vertical, i18n::t("general.column"));
         ui.add_space(8.0);
         switcher_order(ui, form);
