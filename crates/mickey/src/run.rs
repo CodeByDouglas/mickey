@@ -418,7 +418,7 @@ fn run_from_config() -> Result<(), String> {
     // triggers them: no clipboard, no transfers.
     let received = crate::clipboard::received::base()
         .map(|base| base.join("transfers"))
-        .inspect_err(|err| eprintln!("mickey: {err}; files will cross only whole"))
+        .inspect_err(|err| eprintln!("mickey: {err}; copied files will not cross"))
         .ok();
     let transfers = received.zip(keeper.clone()).map(|(received, keeper)| {
         std::sync::Arc::new(crate::transfer::trigger::Transfers::new(
