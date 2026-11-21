@@ -362,10 +362,9 @@ fn ask(
     }
 }
 
-/// Asks with `mickey-ui pair` (PRD 0010), installed next to this program;
-/// `None` when it cannot show a window, so the terminal is asked instead.
-/// Asks in a `mickey-ui pair` window, closed if `stopped` says the other
-/// PC ended it; `None` with no display to open one on.
+/// Asks in a `mickey-ui pair` window (PRD 0010), closed if `stopped` says
+/// the other PC ended it; `None` with no display to open one on, so the
+/// terminal is asked instead.
 fn ask_in_window(who: &str, code: &str, stopped: &dyn Fn() -> bool) -> Option<Answer> {
     let mut window = crate::window::ui_command(&["pair", who, code])
         .and_then(|mut ui| ui.spawn())

@@ -240,8 +240,8 @@ impl Form {
                 .collect();
             out += &format!("switcher_order = [{}]\n", names.join(", "));
         }
-        // Always written: `auto` is the default, but the owner's choice
-        // survives a save.
+        // Written only when chosen: `auto`, the default, needs no line, and
+        // a chosen language survives a save.
         if self.language != "auto" {
             out += &format!(
                 "language = {}    # or auto (the system's)\n",

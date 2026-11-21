@@ -119,8 +119,7 @@ mod linux {
                 .any(|found| found.device.button_down().unwrap_or(true))
         }
 
-        /// Where the cursor is on this desktop, if the compositor says.
-        /// A touchpad kept local (`forward = false`) is not grabbed: its
+        /// Takes every input device from the desktop. A touchpad kept local (`forward = false`) is not grabbed: its
         /// events keep reaching this PC's own cursor while the keyboard
         /// and mouse go to another PC.
         pub fn grab(&self) -> Result<Grabbed<'_>, String> {

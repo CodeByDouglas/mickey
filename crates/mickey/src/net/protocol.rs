@@ -13,7 +13,8 @@ use crate::monitors::Monitor;
 use std::fmt;
 
 /// 2: messages travel inside the secure link (PRD 0002).
-/// 3: `Monitors`, `Enter` and `Leave` (PRD 0005), `Focus` (PRD 0009).
+/// 3: `Monitors`, `Enter` and `Leave` (PRD 0005), `Focus` (PRD 0009); later
+/// `Arrange`, `Refused`, `Picked` and `NotPaired`, without a new number.
 pub const VERSION: u8 = 3;
 
 /// Longest frame, a full `Monitors`: length, type and count bytes, then

@@ -126,7 +126,8 @@ fn here() -> (Path, Option<&'static crate::desktop::portal::Portal>) {
 }
 
 /// Puts this PC's cursor at `x, y` of its desktop. uinput moves are
-/// relative, so Hyprland places it (PRD 0005 *Discoveries*).
+/// relative, so the desktop places it, each its own way (`Path`: Hyprland,
+/// Sway, the X server or the portal; PRD 0005 *Discoveries*).
 #[cfg(target_os = "linux")]
 pub fn place(x: i32, y: i32) -> io::Result<()> {
     use crate::desktop::Session;

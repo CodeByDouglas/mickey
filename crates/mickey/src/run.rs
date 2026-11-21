@@ -366,8 +366,6 @@ fn run_from_config() -> Result<(), String> {
         None => config::Config::empty(),
     };
     let this_pc = &config.this_pc;
-    // Let the other PCs find this one, and hear them (PRD 0010). Without
-    // it Mickey still works with the addresses in config.toml.
     // Just updated: show what changed, once. Before the identity is made,
     // so a first install is told apart.
     crate::whats_new::after_update(&identity::data_dir()?);
@@ -385,6 +383,8 @@ fn run_from_config() -> Result<(), String> {
             audio::port(this_pc.listen.port())
         );
     }
+    // Let the other PCs find this one, and hear them (PRD 0010). Without
+    // it Mickey still works with the addresses in config.toml.
     let found = discovery::start(me)
         .inspect_err(|err| eprintln!("mickey: {err}; other PCs will not show up by themselves"))
         .ok();

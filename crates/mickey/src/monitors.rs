@@ -115,7 +115,7 @@ pub fn first_found(
 }
 
 /// Whether this PC's monitors can be read again while Mickey runs: on
-/// Windows and Hyprland. Not on GNOME and KDE: each read goes through the
+/// Windows, Hyprland, Sway and X11. Not on GNOME and KDE: each read goes through the
 /// RemoteDesktop portal, which reports them once per session, and reading
 /// every second could ask for permission again.
 pub fn follows_changes() -> bool {

@@ -102,12 +102,12 @@ pub fn encode(sender: &Member, others: &[Member]) -> String {
     lines.join("\n")
 }
 
-/// Reads a map that came from `from`. Anything from the network may be
-/// garbage: a bad line makes the whole map an error.
 /// The most PCs a group map may name, as many as discovery keeps: more is
 /// no real group, and each unknown one could become a question on screen.
 pub const MAX_MEMBERS: usize = 64;
 
+/// Reads a map that came from `from`. Anything from the network may be
+/// garbage: a bad line makes the whole map an error.
 pub fn decode(text: &str, from: IpAddr) -> Result<Vec<Member>, String> {
     if text.lines().count() > MAX_MEMBERS {
         return Err(format!("a group map of more than {MAX_MEMBERS} PCs"));
