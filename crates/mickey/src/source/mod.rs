@@ -142,7 +142,7 @@ impl InControl {
 /// Opens `mickey-ui <window>` (settings, history), installed next to this
 /// program, and leaves it running on its own.
 fn open_window(window: &str) {
-    if let Err(err) = crate::window::ui_command(&[window]).and_then(|mut ui| ui.spawn()) {
+    if let Err(err) = crate::window::open(&[window]) {
         eprintln!("mickey: cannot open the {window} window: {err}");
     }
 }
