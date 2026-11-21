@@ -102,11 +102,16 @@ recent copies.
     `x-special/gnome-copied-files` (`copy\nfile:///…`) as well as
     `text/uri-list`.
   - **Noticing copies works** (`SelectionOwnerChanged`).
-  - **Reading is not confirmed yet.** The Python prototype failed passing
-    the file descriptor.
-  - Building it is #522: first a Rust spike for reading, with `ashpd`'s
-    `clipboard` feature, and for a session that asks for the clipboard
-    alone.
+  - **Reading works** (Rust spike, 2026-11-20, `ashpd` 0.13):
+    `SelectionRead` gave the text copied in GNOME Text Editor, byte for
+    byte. The Python prototype's failure was its own.
+  - **A session for the clipboard alone does not start:** GNOME's dialog
+    keeps Share disabled until *Allow Remote Interaction* is on. A GNOME
+    PC that is only a source must ask for keyboard and pointer too
+    (approved once, with a restore token).
+  - `ashpd` 0.13 reads `SelectionOwnerChanged` wrong (no types, owner
+    unknown): asking for each type Mickey takes, in order, works instead.
+  - Building it is #522; the spike's details are there.
 - **The history is this PC's**: it includes what arrived from other PCs,
   but not copies made on another PC that never crossed. Showing the other
   PCs' histories is left for later.
