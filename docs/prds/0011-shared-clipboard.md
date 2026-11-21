@@ -111,7 +111,13 @@ recent copies.
     (approved once, with a restore token).
   - `ashpd` 0.13 reads `SelectionOwnerChanged` wrong (no types, owner
     unknown): asking for each type Mickey takes, in order, works instead.
-  - Building it is #522; the spike's details are there.
+  - **Writing needs no portal.** Through XWayland, what Mickey already
+    does with `arboard`, text pasted in GNOME Text Editor and a file list
+    pasted in Nautilus (2026-11-20, same VM). Mickey's service gets
+    `DISPLAY` and `XAUTHORITY` from GNOME's session. Only **reading**
+    needs the portal: XWayland hands a copy made in a Wayland app only to
+    a focused X11 window.
+  - Building the reading is #522; the spike's details are there.
 - **The history is this PC's**: it includes what arrived from other PCs,
   but not copies made on another PC that never crossed. Showing the other
   PCs' histories is left for later.
