@@ -349,6 +349,19 @@ impl Config {
     }
 }
 
+/// Whether `port` can be a PC's input port: the data and transfer ports
+/// are the next two, and a port past 65533 would wrap them round to 0 and
+/// 1. Not 0 either, which asks the system for any port.
+fn port_fits(what: &str, port: u16) -> Result<(), String> {
+    if port == 0 || port > u16::MAX - 2 {
+        return Err(format!(
+            "{what} port {port} must be 1 to {}: the two after it are the data and transfer ports",
+            u16::MAX - 2
+        ));
+    }
+    Ok(())
+}
+
 /// `$XDG_CONFIG_HOME/mickey/config.toml` (or `~/.config/...`) on Linux,
 /// `%APPDATA%\mickey\config.toml` on Windows.
 pub fn path() -> Result<PathBuf, String> {
@@ -396,13 +409,9 @@ pub fn parse(text: &str) -> Result<Config, String> {
             "this PC's name {name:?} must be 1 to 64 bytes, without tabs or line breaks"
         ));
     }
-    // The data and transfer ports are the next two.
-    if config.this_pc.listen.port() > u16::MAX - 2 {
-        return Err(format!(
-            "listen port {} leaves no room for the two after it (data, transfers); use {} or less",
-            config.this_pc.listen.port(),
-            u16::MAX - 2
-        ));
+    port_fits("listen", config.this_pc.listen.port())?;
+    for peer in &config.peers {
+        port_fits(&format!("{}'s", peer.name), peer.address.port())?;
     }
     if config.interface.bring_over_gb > MAX_BRING_OVER_GB {
         return Err(format!(
@@ -773,6 +782,9 @@ mod tests {
         assert!(parse("[interface]\nbring_position = \"middle\"\n").is_err());
         assert!(parse("[interface]\nbring_over_gb = 100000\n").is_err());
         assert!(parse("[this_pc]\nlisten = \"0.0.0.0:65535\"\n").is_err());
+        assert!(parse("[this_pc]\nlisten = \"0.0.0.0:0\"\n").is_err());
+        assert!(parse("[[peer]]\nname = \"A\"\naddress = \"192.0.2.10:65534\"\n").is_err());
+        assert!(parse("[[peer]]\nname = \"A\"\naddress = \"192.0.2.10:65533\"\n").is_ok());
         assert!(parse("[interface]\nclean_below_percent = 80\n").is_err());
         assert!(parse("[[peer]]\nname = \"a\\tb\"\naddress = \"192.0.2.10:1\"\n").is_err());
     }
