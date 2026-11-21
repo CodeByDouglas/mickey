@@ -217,7 +217,7 @@ fn key_of(pc: &str) -> Result<String, String> {
 /// settings window's Save does).
 fn change_audio(change: impl FnOnce(&mut config::Audio)) -> Result<(), String> {
     let path = config::path()?;
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = config::read_text(&path)?;
     let mut audio = config::parse(&text)?.audio;
     change(&mut audio);
     audio.since = config::now_seconds();

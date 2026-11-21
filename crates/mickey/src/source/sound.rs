@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 /// sends it again).
 pub(super) fn take_audio(lines: &str) -> Result<config::Audio, String> {
     let path = config::path()?;
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = config::read_text(&path)?;
     let mine = config::parse(&text)?.audio;
     let taken = mine.taking(lines)?;
     if taken != mine {
@@ -24,7 +24,7 @@ pub(super) fn take_audio(lines: &str) -> Result<config::Audio, String> {
 /// "Listen here").
 pub(super) fn listen_here(me: &[u8; 32]) -> Result<config::Audio, String> {
     let path = config::path()?;
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = config::read_text(&path)?;
     let audio = config::Audio {
         listener: Some(crate::hex::encode(me)),
         since: config::now_seconds(),

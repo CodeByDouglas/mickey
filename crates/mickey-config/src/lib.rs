@@ -363,14 +363,30 @@ pub fn path() -> Result<PathBuf, String> {
         .ok_or_else(|| "cannot find the user's config directory".to_string())
 }
 
+/// The config file's text, to change and `write` back: empty when there is
+/// none yet. Any other failure is an error, never an empty text: changed
+/// and written back, that would erase the owner's whole config but the
+/// part changed (found in review: four callers did that).
+pub fn read_text(path: &std::path::Path) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(format!("cannot read {}: {err}", path.display())),
+    }
+}
+
 /// Writes `text` to the config file at `path`, creating its folder first:
 /// on a fresh install `~/.config/mickey` does not exist yet, and the first
-/// PC connected must not fail on that.
+/// PC connected must not fail on that. Written beside it, then put in its
+/// place: stopped halfway, the old file stays whole, never cut short.
 pub fn write(path: &std::path::Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     }
-    std::fs::write(path, text).map_err(|err| format!("{}: {err}", path.display()))
+    let beside = path.with_extension("toml.new");
+    std::fs::write(&beside, text)
+        .and_then(|()| std::fs::rename(&beside, path))
+        .map_err(|err| format!("{}: {err}", path.display()))
 }
 
 pub fn parse(text: &str) -> Result<Config, String> {
@@ -775,6 +791,24 @@ mod tests {
         assert!(parse("[this_pc]\nlisten = \"0.0.0.0:65535\"\n").is_err());
         assert!(parse("[interface]\nclean_below_percent = 80\n").is_err());
         assert!(parse("[[peer]]\nname = \"a\\tb\"\naddress = \"192.0.2.10:1\"\n").is_err());
+    }
+
+    #[test]
+    fn a_config_that_cannot_be_read_is_an_error_never_empty() {
+        let dir = std::env::temp_dir().join(format!("mickey-read-text-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(read_text(&dir.join("none.toml")).unwrap(), "", "none yet");
+        // A folder where the file should be: it cannot be read.
+        assert!(read_text(&dir).is_err());
+        let path = dir.join("config.toml");
+        write(&path, "a = 1\n").unwrap();
+        write(&path, "b = 2\n").unwrap();
+        assert_eq!(read_text(&path).unwrap(), "b = 2\n");
+        assert!(
+            !dir.join("config.toml.new").exists(),
+            "nothing left beside it"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

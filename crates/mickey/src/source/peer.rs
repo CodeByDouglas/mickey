@@ -393,7 +393,7 @@ pub(super) fn report_latency(peer: &Peer) {
 /// connects (#184).
 pub(super) fn save_key(name: &str, key: &[u8; 32]) {
     let saved = config::path().and_then(|path| {
-        let text = std::fs::read_to_string(&path).map_err(|err| err.to_string())?;
+        let text = config::read_text(&path)?;
         let text = config::set_key(&text, name, &crate::hex::encode(key))?;
         config::write(&path, &text)
     });
