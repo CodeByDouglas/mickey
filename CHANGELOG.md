@@ -11,6 +11,8 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
+## 0.6.0
+
 - Shared sound stays in step with what you see: it used to arrive up to
   a third of a second late on Windows, and click now and then. The PC
   that listens now plays a hair faster or slower, unheard, so the delay
