@@ -19,6 +19,12 @@ const MAX_BROKEN: usize = 8;
 /// fetch again: older ones are fetched again if offered again.
 const MAX_DONE: usize = 64;
 
+/// The most transfers from one PC running or waiting their turn at once:
+/// each holds a thread and a folder, and a PC in control could otherwise
+/// offer new files over and over (found in review). Far above what a
+/// person copies and crosses.
+const MAX_RUNNING: usize = 4;
+
 /// Each offer fetched here, by the offering PC's key and the offer's id.
 #[derive(Default)]
 pub struct Fetches(Mutex<HashMap<Key, Fetch>>);
@@ -46,6 +52,8 @@ enum Fetch {
 pub enum Begin {
     /// Nothing: it is being fetched.
     Skip,
+    /// Nothing: that PC has `MAX_RUNNING` transfers going already.
+    TooMany,
     /// It is all here already, at these paths: pasted again, not fetched
     /// again (copied again on the other PC, or crossing again).
     Here(Vec<PathBuf>),
@@ -71,6 +79,13 @@ impl Fetches {
                 return Begin::Here(landed.clone());
             }
             _ => {}
+        }
+        let running = fetches
+            .iter()
+            .filter(|(other, fetch)| other.0 == key.0 && matches!(fetch, Fetch::Running(_)))
+            .count();
+        if running >= MAX_RUNNING {
+            return Begin::TooMany;
         }
         match fetches.insert(key, Fetch::Running(None)) {
             // Its folder deleted since (by the owner, or the received
@@ -218,6 +233,21 @@ mod tests {
         assert_eq!(fetches.waiting(), [PathBuf::from("/received/1")]);
         fetches.done(key, vec![PathBuf::from("/received/1/a.txt")]);
         assert!(fetches.waiting().is_empty(), "done: like any other");
+    }
+
+    #[test]
+    fn one_pc_has_only_so_many_transfers_going() {
+        let fetches = Fetches::default();
+        for id in 0..MAX_RUNNING as u64 {
+            assert!(matches!(fetches.begin(([4; 32], id)), Begin::Start));
+        }
+        assert!(matches!(fetches.begin(([4; 32], 99)), Begin::TooMany));
+        assert!(
+            matches!(fetches.begin(([5; 32], 99)), Begin::Start),
+            "another PC's are its own"
+        );
+        fetches.done(([4; 32], 0), Vec::new());
+        assert!(matches!(fetches.begin(([4; 32], 99)), Begin::Start));
     }
 
     #[test]
