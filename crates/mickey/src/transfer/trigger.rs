@@ -136,6 +136,11 @@ impl Transfers {
             let who = mickey_config::peer_name_or_address(offer.ip.unwrap_or(from));
             let (into, mut fetched) = match this.fetches.begin(key) {
                 Begin::Skip => return,
+                Begin::TooMany => {
+                    return eprintln!(
+                        "mickey: files from {who} not fetched: {who} has several transfers going already; copy them again once those are done"
+                    );
+                }
                 Begin::Here(landed) => return this.keeper.write(Content::Files(landed)),
                 Begin::Resume(into, fetched) => (into, *fetched),
                 Begin::Start => match this.landing(&offer, &who) {

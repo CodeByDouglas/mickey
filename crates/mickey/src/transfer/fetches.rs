@@ -10,9 +10,20 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-/// The most broken transfers kept to go on: a PC that started and broke
-/// off many (by design or not) cannot keep their folders for ever.
+/// The most broken transfers kept to go on, per PC: one that started and
+/// broke off many (by design or not) cannot keep their folders for ever,
+/// nor push out another PC's.
 const MAX_BROKEN: usize = 8;
+
+/// The most finished transfers remembered, to paste again rather than
+/// fetch again: older ones are fetched again if offered again.
+const MAX_DONE: usize = 64;
+
+/// The most transfers from one PC running or waiting their turn at once:
+/// each holds a thread and a folder, and a PC in control could otherwise
+/// offer new files over and over (found in review). Far above what a
+/// person copies and crosses.
+const MAX_RUNNING: usize = 4;
 
 /// Each offer fetched here, by the offering PC's key and the offer's id.
 #[derive(Default)]
@@ -33,14 +44,16 @@ enum Fetch {
         fetched: Box<Fetched>,
         at: Instant,
     },
-    /// All there: where its top-level files and folders landed.
-    Done(Vec<PathBuf>),
+    /// All there: where its top-level files and folders landed; since when.
+    Done { landed: Vec<PathBuf>, at: Instant },
 }
 
 /// What to do with an offer that arrives.
 pub enum Begin {
     /// Nothing: it is being fetched.
     Skip,
+    /// Nothing: that PC has `MAX_RUNNING` transfers going already.
+    TooMany,
     /// It is all here already, at these paths: pasted again, not fetched
     /// again (copied again on the other PC, or crossing again).
     Here(Vec<PathBuf>),
@@ -60,15 +73,24 @@ impl Fetches {
             Some(Fetch::Running(_)) => return Begin::Skip,
             // All skipped by the other PC, it is fetched again: nothing
             // was pasted, and the files may be steady now.
-            Some(Fetch::Done(landed))
+            Some(Fetch::Done { landed, .. })
                 if !landed.is_empty() && landed.iter().all(|path| path.exists()) =>
             {
                 return Begin::Here(landed.clone());
             }
             _ => {}
         }
+        let running = fetches
+            .iter()
+            .filter(|(other, fetch)| other.0 == key.0 && matches!(fetch, Fetch::Running(_)))
+            .count();
+        if running >= MAX_RUNNING {
+            return Begin::TooMany;
+        }
         match fetches.insert(key, Fetch::Running(None)) {
-            Some(Fetch::Broken { into, fetched, .. }) => {
+            // Its folder deleted since (by the owner, or the received
+            // folder emptied): nothing to go on with, so it starts over.
+            Some(Fetch::Broken { into, fetched, .. }) if into.is_dir() => {
                 fetches.insert(key, Fetch::Running(Some(into.clone())));
                 Begin::Resume(into, fetched)
             }
@@ -82,29 +104,32 @@ impl Fetches {
     }
 
     /// Records that `key` is all here, at `landed`.
+    /// The oldest beyond `MAX_DONE` are forgotten.
     pub fn done(&self, key: Key, landed: Vec<PathBuf>) {
-        self.0.lock_anyway().insert(key, Fetch::Done(landed));
+        let mut fetches = self.0.lock_anyway();
+        let at = Instant::now();
+        fetches.insert(key, Fetch::Done { landed, at });
+        let done = |_: &Key, fetch: &Fetch| match fetch {
+            Fetch::Done { at, .. } => Some(*at),
+            _ => None,
+        };
+        forget_oldest(&mut fetches, done, MAX_DONE);
     }
 
     /// Records that `key` broke, into `into`, with what it had done.
-    /// The oldest beyond `MAX_BROKEN` are forgotten: they would start over.
+    /// The oldest of that PC's beyond `MAX_BROKEN` are forgotten: they
+    /// would start over.
     pub fn broke(&self, key: Key, into: PathBuf, fetched: Fetched) {
         let mut fetches = self.0.lock_anyway();
         let fetched = Box::new(fetched);
         let at = Instant::now();
         fetches.insert(key, Fetch::Broken { into, fetched, at });
-        let mut broken: Vec<(Instant, Key)> = fetches
-            .iter()
-            .filter_map(|(key, fetch)| match fetch {
-                Fetch::Broken { at, .. } => Some((*at, *key)),
-                _ => None,
-            })
-            .collect();
-        broken.sort();
-        let extra = broken.len().saturating_sub(MAX_BROKEN);
-        for (_, key) in broken.into_iter().take(extra) {
-            fetches.remove(&key);
-        }
+        let from = key.0;
+        let broken = |key: &Key, fetch: &Fetch| match fetch {
+            Fetch::Broken { at, .. } if key.0 == from => Some(*at),
+            _ => None,
+        };
+        forget_oldest(&mut fetches, broken, MAX_BROKEN);
     }
 
     /// The folders of transfers running, waiting their turn, or broken and
@@ -117,7 +142,7 @@ impl Fetches {
             .filter_map(|fetch| match fetch {
                 Fetch::Running(into) => into.clone(),
                 Fetch::Broken { into, .. } => Some(into.clone()),
-                Fetch::Done(_) => None,
+                Fetch::Done { .. } => None,
             })
             .collect()
     }
@@ -125,6 +150,24 @@ impl Fetches {
     /// Forgets `key`: the owner said Ignore, or it could not start.
     pub fn forget(&self, key: Key) {
         self.0.lock_anyway().remove(&key);
+    }
+}
+
+/// Forgets the oldest of the fetches `since` dates, beyond the `most`
+/// newest; the others are not counted.
+fn forget_oldest(
+    fetches: &mut HashMap<Key, Fetch>,
+    since: impl Fn(&Key, &Fetch) -> Option<Instant>,
+    most: usize,
+) {
+    let mut counted: Vec<(Instant, Key)> = fetches
+        .iter()
+        .filter_map(|(key, fetch)| since(key, fetch).map(|at| (at, *key)))
+        .collect();
+    counted.sort();
+    let extra = counted.len().saturating_sub(most);
+    for (_, key) in counted.into_iter().take(extra) {
+        fetches.remove(&key);
     }
 }
 
@@ -154,14 +197,12 @@ mod tests {
         );
         let mut fetched = Fetched::default();
         fetched.summary.files = 7;
-        fetches.broke(key, "/somewhere".into(), fetched);
+        let folder = std::env::temp_dir();
+        fetches.broke(key, folder.clone(), fetched);
         let Begin::Resume(into, fetched) = fetches.begin(key) else {
             panic!("a broken fetch goes on");
         };
-        assert_eq!(
-            (into, fetched.summary.files),
-            (PathBuf::from("/somewhere"), 7)
-        );
+        assert_eq!((into, fetched.summary.files), (folder, 7));
         // All here: pasted again, not fetched again; fetched again once
         // the files are gone.
         let here = std::env::temp_dir();
@@ -192,6 +233,52 @@ mod tests {
         assert_eq!(fetches.waiting(), [PathBuf::from("/received/1")]);
         fetches.done(key, vec![PathBuf::from("/received/1/a.txt")]);
         assert!(fetches.waiting().is_empty(), "done: like any other");
+    }
+
+    #[test]
+    fn one_pc_has_only_so_many_transfers_going() {
+        let fetches = Fetches::default();
+        for id in 0..MAX_RUNNING as u64 {
+            assert!(matches!(fetches.begin(([4; 32], id)), Begin::Start));
+        }
+        assert!(matches!(fetches.begin(([4; 32], 99)), Begin::TooMany));
+        assert!(
+            matches!(fetches.begin(([5; 32], 99)), Begin::Start),
+            "another PC's are its own"
+        );
+        fetches.done(([4; 32], 0), Vec::new());
+        assert!(matches!(fetches.begin(([4; 32], 99)), Begin::Start));
+    }
+
+    #[test]
+    fn a_broken_transfer_whose_folder_is_gone_starts_over() {
+        let fetches = Fetches::default();
+        let key = ([6; 32], 1);
+        fetches.begin(key);
+        fetches.broke(key, "/no/such/folder/for/mickey".into(), Fetched::default());
+        assert!(matches!(fetches.begin(key), Begin::Start));
+    }
+
+    #[test]
+    fn another_pcs_broken_transfers_are_not_pushed_out() {
+        let fetches = Fetches::default();
+        fetches.begin(([1; 32], 0));
+        fetches.broke(([1; 32], 0), "/received/a".into(), Fetched::default());
+        for id in 0..MAX_BROKEN as u64 + 3 {
+            let key = ([2; 32], id);
+            fetches.begin(key);
+            fetches.broke(key, format!("/received/{id}").into(), Fetched::default());
+        }
+        assert!(fetches.waiting().contains(&PathBuf::from("/received/a")));
+    }
+
+    #[test]
+    fn only_the_newest_finished_transfers_are_remembered() {
+        let fetches = Fetches::default();
+        for id in 0..MAX_DONE as u64 + 5 {
+            fetches.done(([3; 32], id), Vec::new());
+        }
+        assert_eq!(fetches.0.lock_anyway().len(), MAX_DONE);
     }
 
     #[test]

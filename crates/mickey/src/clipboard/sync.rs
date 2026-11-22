@@ -404,8 +404,9 @@ impl DataLinks {
                         // or this thread was busy): this clipboard would
                         // reach a PC the keyboard already left, which
                         // refuses it (#436). The newer crossing carries.
-                        // To this PC it still goes: here nothing refuses
-                        // it, and the newer crossing carries it on.
+                        // To this PC a text or an image still goes: here
+                        // nothing refuses it, and the newer crossing
+                        // carries it on (`carry`).
                         let current = || latest.load(Ordering::SeqCst) == crossing;
                         if to.is_none() || current() {
                             let peers = Peers {
@@ -559,7 +560,11 @@ fn carry(
     let Some(carried) = carried else {
         return;
     };
-    if to.is_some() && !current() {
+    // Overtaken: only a text or an image is still put here, where the
+    // newer crossing reads it at once. Files would start a fetch, or a
+    // Bring question, on a PC the owner has left, and land after the newer
+    // crossing read the old clipboard (found in review).
+    if !current() && (to.is_some() || !matches!(carried, Carried::Content(_))) {
         return;
     }
     match to {
