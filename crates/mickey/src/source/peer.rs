@@ -250,13 +250,7 @@ fn why_word(why: NotPairedWhy) -> &'static str {
 /// for the window.
 fn tell_not_paired(name: &str, why: &str, word: &str) {
     println!("mickey: not paired with {name}: {why}");
-    let shown =
-        crate::window::ui_command(&["not-paired", name, word]).and_then(|mut ui| ui.spawn());
-    if let Ok(mut window) = shown {
-        crate::threads::spawn("not paired", move || {
-            let _ = window.wait();
-        });
-    }
+    let _ = crate::window::open(&["not-paired", name, word]);
 }
 
 /// What to tell the person when `name` did not answer the handshake with

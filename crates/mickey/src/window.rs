@@ -23,6 +23,18 @@ pub fn ui_command<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> std::io::Result<Comm
     Ok(command)
 }
 
+/// Opens `mickey-ui` with `args` and leaves it open on its own, its answer
+/// unread. A thread waits for it: a window never waited for stays a zombie
+/// process on Linux until Mickey ends (found in review: every Settings or
+/// History opened from the tray did).
+pub fn open<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> std::io::Result<()> {
+    let mut window = ui_command(args)?.spawn()?;
+    crate::threads::spawn("window", move || {
+        let _ = window.wait();
+    });
+    Ok(())
+}
+
 /// `mickey-ui` arguments for the switcher (a view-only copy if `mirror`):
 /// this PC's corner and direction, then one card per PC.
 pub fn switcher_args(cards: &[String], interface: &config::Interface, mirror: bool) -> Vec<String> {

@@ -32,12 +32,10 @@ pub fn after_update(data_dir: &Path) {
     if let Err(err) = std::fs::create_dir_all(data_dir).and_then(|()| std::fs::write(&path, now)) {
         eprintln!("mickey: cannot remember the version that ran: {err}");
     }
-    if should_show(last.as_deref(), known, now) {
-        match crate::window::ui_command(&["whats-new"]).and_then(|mut ui| ui.spawn()) {
-            // Waited for, so it leaves no zombie behind when closed.
-            Ok(mut ui) => drop(std::thread::spawn(move || ui.wait())),
-            Err(err) => eprintln!("mickey: cannot show what's new: {err}"),
-        }
+    if should_show(last.as_deref(), known, now)
+        && let Err(err) = crate::window::open(&["whats-new"])
+    {
+        eprintln!("mickey: cannot show what's new: {err}");
     }
 }
 
