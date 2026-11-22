@@ -15,8 +15,6 @@ pub fn on_screen(monitors: &[Monitor], (x, y): (i32, i32)) -> bool {
         .any(|m| (m.x..m.x + m.width).contains(&x) && (m.y..m.y + m.height).contains(&y))
 }
 
-/// The pixel the cursor at `at` would step onto with a motion of `delta`,
-/// if that pixel is off every monitor of `here`: the cursor is pushing
 /// Asking where the cursor is costs a round trip to the compositor on
 /// Linux (Hyprland's socket), so motion is summed and the edge checked at
 /// most once per `EDGE_CHECK` instead of on every mouse report (#187): at
@@ -111,6 +109,8 @@ impl Throttle {
     }
 }
 
+/// The pixel the cursor at `at` would step onto with a motion of `delta`,
+/// if that pixel is off every monitor of `here`: the cursor is pushing
 /// against the edge of its desktop there.
 pub fn beyond(here: &[Monitor], at: (i32, i32), (dx, dy): (i32, i32)) -> Option<(i32, i32)> {
     if !on_screen(here, at) {
@@ -146,14 +146,14 @@ pub fn back(home: &[Monitor], position: [i32; 2], point: (i32, i32)) -> Option<(
     on_screen(home, here).then_some(here)
 }
 
-/// The stretches of this desktop's edges that lead to a placed peer, as
-/// `(x1, y1, x2, y2)` lines just outside the monitors: where a GNOME or
-/// KDE PC puts its InputCapture barriers (PRD 0004, phase 2). `peers` are
-/// each placed peer's monitors and its position on this desktop.
 /// A stretch of an edge, `(x1, y1, x2, y2)`, both ends included.
 #[cfg(any(target_os = "linux", test))]
 pub type Line = (i32, i32, i32, i32);
 
+/// The stretches of this desktop's edges that lead to a placed peer, as
+/// `Line`s just outside the monitors: where a GNOME or KDE PC puts its
+/// InputCapture barriers (PRD 0004, phase 2). `peers` are each placed
+/// peer's monitors and its position on this desktop.
 #[cfg(any(target_os = "linux", test))]
 pub fn barriers(here: &[Monitor], peers: &[(&[Monitor], [i32; 2])]) -> Vec<Line> {
     let theirs: Vec<Monitor> = peers

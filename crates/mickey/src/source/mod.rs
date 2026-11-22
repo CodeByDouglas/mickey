@@ -334,7 +334,6 @@ pub fn run(
     let mut edge_check = edges::Throttle::new();
     // Hotkeys another PC shared while the focus was away, to take back home.
     let mut pending_hotkeys: Option<String> = None;
-    // The switcher open on this PC for picking, to close it on a second press.
     // The status for bars and commands; without a runtime directory Mickey
     // still works, just without them.
     let control = match Control::start(wake.clone()) {
@@ -789,7 +788,7 @@ pub fn run(
                 }
             }
             Ok(Wake::Controlled(here)) => in_control.peer_says(here),
-            // Both handled below, once `act` no longer borrows the peers.
+            // These are handled below, once `act` no longer borrows the peers.
             Ok(Wake::Arranged(from, position)) => placed = Some((from, position)),
             Ok(Wake::Group(members, by)) => heard_map = Some((members, by)),
             Ok(Wake::Accepted(member, by)) => accepted = Some((member, by)),
@@ -883,7 +882,6 @@ pub fn run(
                     }
                 }
             }
-            // Answered below, once `act` no longer borrows the peers.
             Ok(Wake::Control(request)) if request.order == Order::History => {
                 let answer = match (&history, &keeper) {
                     (Some(history), _) => {

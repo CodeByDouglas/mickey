@@ -27,7 +27,8 @@ use std::time::{Duration, Instant};
 /// Noise adds a 16-byte authentication tag to every encrypted message.
 const TAG_LEN: usize = 16;
 /// The largest Noise message we accept. Handshake messages are under 100
-/// bytes and transport messages under 30, so anything bigger is hostile.
+/// bytes and transport messages at most `MAX_FRAME` plus the tag (145), so
+/// anything bigger is hostile.
 const MAX_NOISE_MESSAGE: usize = 256;
 /// The largest bulk payload: a big screenshot fits, and a hostile peer
 /// cannot make us hold gigabytes.
@@ -472,8 +473,6 @@ fn write_noise(stream: &mut impl Write, message: &[u8]) -> io::Result<()> {
     stream.write_all(message)
 }
 
-/// Reads one Noise message into `buf`; longer than `buf` is an error, so
-/// the input link keeps refusing anything over `MAX_NOISE_MESSAGE`.
 /// Reads `stream` until `until`, however slowly the bytes come: each read
 /// waits only for the time left.
 struct Before<'a> {
@@ -495,6 +494,8 @@ impl Read for Before<'_> {
     }
 }
 
+/// Reads one Noise message into `buf`; longer than `buf` is an error, so
+/// the input link keeps refusing anything over `MAX_NOISE_MESSAGE`.
 fn read_noise(stream: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
     let mut len = [0u8; 2];
     stream.read_exact(&mut len)?;
