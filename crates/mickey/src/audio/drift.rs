@@ -6,6 +6,11 @@
 //! is set against this PC's system clock from the first turn that played,
 //! so what piled up while the sound card opened is not counted. The two
 //! apart is the drift: at 50 ppm the buffer gains or loses 3 ms a minute.
+//!
+//! The sending PC leaves silence out, so its counter stands still while
+//! this PC's clock runs on: after a pause the clocks are measured afresh,
+//! or a second of pauses a minute would read as 16 000 ppm (found in
+//! review).
 
 use std::time::{Duration, Instant};
 
@@ -13,6 +18,9 @@ use std::time::{Duration, Instant};
 pub const EVERY: Duration = Duration::from_secs(60);
 /// One datagram's worth of sound.
 const DATAGRAM: Duration = Duration::from_millis(5);
+/// Turns with no new datagram after which the sender is taken to have
+/// paused (left silence out), not to be late: 50 ms.
+const PAUSED: u32 = 10;
 
 #[derive(Debug, Default)]
 pub struct Drift {
@@ -22,6 +30,9 @@ pub struct Drift {
     newest: Option<u64>,
     /// Turns the player took since the first sound.
     turns: u64,
+    /// The newest counter at the last turn, and turns since it moved.
+    last: Option<u64>,
+    still: u32,
     /// What the buffer held at each turn this minute, in ms.
     held: Held,
     said: Option<Instant>,
@@ -63,6 +74,17 @@ impl Drift {
         let Some(newest) = self.newest else {
             return;
         };
+        if self.last == Some(newest) {
+            self.still = self.still.saturating_add(1);
+        } else {
+            // Back after a pause: measured from here.
+            if self.still >= PAUSED {
+                self.start = None;
+                self.turns = 0;
+            }
+            self.still = 0;
+            self.last = Some(newest);
+        }
         // Playing now: the newest, less what is held.
         self.start
             .get_or_insert((now, newest.saturating_sub(held_ms as u64 / 5)));
@@ -141,5 +163,36 @@ mod tests {
             drift.report(start + Duration::from_secs(2)).is_none(),
             "once a minute"
         );
+    }
+
+    #[test]
+    fn a_pause_the_sender_left_out_is_no_drift() {
+        let t0 = Instant::now();
+        let at = |turn: u64| t0 + DATAGRAM * turn as u32;
+        let mut drift = Drift::default();
+        let mut counter = 0;
+        let mut turn = 0;
+        // Two clocks that agree: a datagram a turn, but for a second of
+        // silence the sender left out (its counter stands still).
+        for _ in 0..1000 {
+            counter += 1;
+            drift.heard(counter);
+            drift.turn(0, at(turn));
+            turn += 1;
+        }
+        for _ in 0..200 {
+            drift.turn(0, at(turn));
+            turn += 1;
+        }
+        for _ in 0..13_000 {
+            counter += 1;
+            drift.heard(counter);
+            drift.turn(0, at(turn));
+            turn += 1;
+        }
+        let report = drift.report(at(turn - 1)).unwrap();
+        let close = |got: Option<f64>| got.unwrap().abs() < 200.0;
+        assert!(close(report.sender_ppm), "{report:?}");
+        assert!(close(report.card_ppm), "{report:?}");
     }
 }
