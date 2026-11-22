@@ -91,20 +91,25 @@ impl Link {
         }
     }
 
-    /// Says, once, when the peer closes the connection, without reading
-    /// anything from it: it only looks (a peek), so what the peer sends
-    /// is still there to read. For a question shown while the peer waits,
-    /// which is moot once it has gone (#420).
-    pub fn when_closed(&self) -> io::Result<std::sync::mpsc::Receiver<()>> {
-        let stream = self.stream.try_clone()?;
-        let (closed, when) = std::sync::mpsc::channel();
-        crate::threads::spawn("link watch", move || {
-            // 0 bytes: the peer closed it. Data: it is still there.
-            if matches!(stream.peek(&mut [0u8; 1]), Ok(0) | Err(_)) {
-                let _ = closed.send(());
-            }
-        });
-        Ok(when)
+    /// Whether the peer has closed the connection, seen at once and
+    /// without reading anything: it only looks (a peek), so what the peer
+    /// sent is still there to read. For a question shown while the peer
+    /// waits, which is moot once it has gone (#420). Only while nothing
+    /// else reads this link: it is made non-blocking for that look.
+    ///
+    /// Once the peer has sent something, a close behind it is not seen:
+    /// the peek finds the data first. Who asks also needs a time limit.
+    pub fn peer_gone(&self) -> bool {
+        if self.stream.set_nonblocking(true).is_err() {
+            return true;
+        }
+        // 0 bytes: the peer closed it. Data, or nothing yet: it is there.
+        let gone = match self.stream.peek(&mut [0u8; 1]) {
+            Ok(0) => true,
+            Ok(_) => false,
+            Err(err) => err.kind() != io::ErrorKind::WouldBlock,
+        };
+        self.stream.set_nonblocking(false).is_err() || gone
     }
 
     /// Closes the connection both ways, waking whoever is reading it.
@@ -734,13 +739,15 @@ mod tests {
     fn a_link_says_when_its_peer_closes_it_and_reads_nothing() {
         use std::time::Duration;
         let (mut ours, mut theirs) = crate::test_util::link_pair();
-        let closed = ours.when_closed().unwrap();
+        assert!(!ours.peer_gone(), "nothing sent yet is no close");
         theirs.send_bulk(b"still here").unwrap();
         std::thread::sleep(Duration::from_millis(200));
-        assert!(closed.try_recv().is_err(), "data is no close");
+        assert!(!ours.peer_gone(), "data is no close");
         assert_eq!(ours.recv_bulk().unwrap(), b"still here", "the peek kept it");
-        let closed = ours.when_closed().unwrap();
         drop(theirs);
-        assert!(closed.recv_timeout(Duration::from_secs(2)).is_ok());
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(ours.peer_gone());
+        // And the link reads as before: blocking, so a closed one ends.
+        assert!(ours.recv_bulk().is_err());
     }
 }
