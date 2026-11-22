@@ -103,7 +103,7 @@ pub(super) fn arrange(
 /// window and the next start see it too.
 pub(super) fn save_position(name: &str, position: [i32; 2]) {
     let saved = config::path().and_then(|path| {
-        let text = std::fs::read_to_string(&path).map_err(|err| err.to_string())?;
+        let text = config::read_text(&path)?;
         let text = config::set_position(&text, name, position)?;
         config::write(&path, &text)
     });

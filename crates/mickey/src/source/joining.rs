@@ -179,7 +179,7 @@ pub(super) fn add_peer(
     position: Option<[i32; 2]>,
 ) -> Result<usize, String> {
     let name = config::path().and_then(|path| {
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let text = config::read_text(&path)?;
         let (text, name) = config::add_peer(&text, name, address, position)?;
         config::write(&path, &text)?;
         Ok(name)

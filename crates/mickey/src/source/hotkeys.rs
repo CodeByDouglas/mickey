@@ -117,7 +117,7 @@ pub(super) fn offer_hotkeys(lines: String, who: &str, wake: &Sender<Wake>) {
 pub(super) fn take_hotkeys(lines: &str) -> Result<config::Config, String> {
     let mut hotkeys = config::Hotkeys::from_lines(lines)?;
     let path = config::path()?;
-    let text = std::fs::read_to_string(&path).map_err(|err| err.to_string())?;
+    let text = config::read_text(&path)?;
     // This PC's own, never shared: kept, not lost with the rest (#437).
     hotkeys.clipboard = config::parse(&text)?.hotkeys.clipboard;
     let new = config::set_hotkeys(&text, &hotkeys)?;
