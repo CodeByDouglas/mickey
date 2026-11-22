@@ -124,20 +124,35 @@ pub fn decode(bytes: &[u8]) -> Result<Wire, String> {
 }
 
 /// The copied files' names and bytes; folders are skipped, and too much
-/// in total is an error rather than a slow crossing.
+/// in total is an error rather than a slow crossing. Links are skipped too,
+/// and never followed when opened (`fs::open`), as transfers do: a copied
+/// link to `~/.ssh/id_rsa` must not send the key (found in review). Errors
+/// never name the file: they are logged, and a copied name may be private.
 fn read_files(paths: &[std::path::PathBuf]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    use std::io::Read;
     let mut files = Vec::new();
     let mut total = 0;
-    for path in paths.iter().filter(|path| path.is_file()) {
-        total += path.metadata().map_err(|err| err.to_string())?.len();
+    let plain_file = |path: &&std::path::PathBuf| {
+        path.symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+    };
+    for path in paths.iter().filter(plain_file) {
+        let mut file =
+            crate::fs::open::to_read(path).map_err(|err| format!("a copied file: {err}"))?;
+        total += file
+            .metadata()
+            .map_err(|err| format!("a copied file: {err}"))?
+            .len();
         if total > MAX_FILES {
             return Err(format!("the copied files are over {} MB", MAX_FILES >> 20));
         }
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| format!("{} has no usable name", path.display()))?;
-        let bytes = std::fs::read(path).map_err(|err| format!("{}: {err}", path.display()))?;
+            .ok_or("a copied file has no usable name")?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|err| format!("a copied file: {err}"))?;
         files.push((name.to_string(), bytes));
     }
     Ok(files)
@@ -328,5 +343,18 @@ mod tests {
         }
         bytes.push(0);
         assert!(decode(&bytes).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copied_link_is_left_out_never_followed() {
+        let dir = std::env::temp_dir().join(format!("mickey-wire-links-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("secret"), b"private key").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"hello").unwrap();
+        std::os::unix::fs::symlink(dir.join("secret"), dir.join("id_rsa")).unwrap();
+        let read = super::read_files(&[dir.join("notes.txt"), dir.join("id_rsa")]).unwrap();
+        assert_eq!(read, [("notes.txt".to_string(), b"hello".to_vec())]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
