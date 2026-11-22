@@ -332,6 +332,15 @@ pub fn window(who: &str) -> ExitCode {
                     }
                     ctx.request_repaint();
                 }
+                // `mickey` went away mid-transfer: nothing more will come,
+                // so it says so, and the running Ratão stops (it would
+                // redraw the window 30 times a second until closed).
+                if let Ok(mut state) = reading.lock()
+                    && matches!(*state, State::Starting | State::Going { .. })
+                {
+                    *state = State::Failed(String::new());
+                }
+                ctx.request_repaint();
             });
             Ok(Box::new(Progress {
                 who,
