@@ -74,6 +74,24 @@ unsafe extern "system" {
 unsafe extern "system" {
     fn GetCurrentProcess() -> *mut std::ffi::c_void;
     fn SetPriorityClass(process: *mut std::ffi::c_void, class: u32) -> i32;
+    fn GetSystemWindowsDirectoryW(buffer: *mut u16, size: u32) -> u32;
+}
+
+/// The Windows folder (`C:\Windows`), as the system says. Not from
+/// `SystemRoot` or `windir`: environment variables a user can set for
+/// themselves, which a Mickey run as administrator must not trust to find
+/// the tools it runs or the folder it writes the task to (found in review).
+pub fn windows_dir() -> io::Result<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    let mut buffer = [0u16; 260];
+    // SAFETY: the buffer is valid for `buffer.len()` UTF-16 units, the
+    // size passed; the call writes at most that many and returns the
+    // length written, or a larger size needed, or 0 on failure.
+    let length = unsafe { GetSystemWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+    match buffer.get(..length as usize) {
+        Some(path) if length > 0 => Ok(std::ffi::OsString::from_wide(path).into()),
+        _ => Err(io::Error::last_os_error()),
+    }
 }
 
 const ABOVE_NORMAL_PRIORITY_CLASS: u32 = 0x0000_8000;
@@ -284,4 +302,19 @@ pub fn monitors() -> io::Result<Vec<crate::monitors::Monitor>> {
         return Err(io::Error::last_os_error());
     }
     Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_windows_folder_comes_from_the_system_whatever_systemroot_says() {
+        // SAFETY: no other test reads or writes SystemRoot, so no thread
+        // reads the environment while it changes.
+        unsafe { std::env::set_var("SystemRoot", r"C:\not-windows") };
+        let dir = super::windows_dir().unwrap();
+        assert!(
+            dir.join("System32").join("schtasks.exe").is_file(),
+            "{dir:?}"
+        );
+    }
 }

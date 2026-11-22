@@ -126,8 +126,9 @@ pub fn step_down() -> Result<(), String> {
 
 #[cfg(windows)]
 pub fn system_tool(tool: &str) -> std::path::PathBuf {
-    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-    let system32 = std::path::Path::new(&root).join("System32");
+    // Without the system's answer, the usual place: still not a variable.
+    let root = crate::platform::windows::windows_dir().unwrap_or_else(|_| "C:\\Windows".into());
+    let system32 = root.join("System32");
     match tool {
         "powershell.exe" => system32.join("WindowsPowerShell\\v1.0\\powershell.exe"),
         _ => system32.join(tool),
@@ -263,8 +264,9 @@ mod imp {
         let random = crate::net::identity::random_bytes()?;
         let name = format!("mickey-task-{}.xml", crate::hex::encode(&random[..8]));
         let dir = if crate::platform::acl::elevated() {
-            let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-            std::path::Path::new(&root).join("Temp")
+            crate::platform::windows::windows_dir()
+                .map_err(|err| format!("cannot find the Windows folder: {err}"))?
+                .join("Temp")
         } else {
             dir.to_path_buf()
         };
