@@ -8,7 +8,6 @@ use crate::control::{self, Control, Order, Request, Status};
 use crate::edges;
 use crate::focus::{Action, Focus, FocusMachine};
 use crate::input::Input;
-use crate::input::emit;
 use crate::input::event::InputEvent;
 use crate::input::hotkey::Hotkey;
 use crate::input::record::{Heard, Recording};
@@ -431,7 +430,19 @@ pub fn run(
     // PCs that were off when the owner saved a layout: told when they
     // connect (#288).
     let mut arrange_unsent: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let trace_edges = std::env::var_os("MICKEY_TRACE_EDGES").is_some();
+    let mut trace_return_at = None;
+    let mut trace_motion = (0_i64, 0_i64, 0_u64);
     loop {
+        if trace_return_at.is_some_and(|at: Instant| at.elapsed() >= Duration::from_millis(100)) {
+            trace_return_at = None;
+            eprintln!(
+                "mickey: edge return cursor after settling: {:?}",
+                crate::input::cursor_now()
+            );
+            let (dx, dy, count) = trace_motion;
+            eprintln!("mickey: edge return input during settling: {count} moves, dx={dx}, dy={dy}");
+        }
         for (index, link) in back.try_iter() {
             // A peer is one PC, known by its key: another trusted PC that
             // took over its address gets nothing meant for it (#184).
@@ -510,6 +521,9 @@ pub fn run(
                 }
                 News::Leave(x, y) => {
                     if focus_machine.focus() == Focus::Remote(index) {
+                        if trace_edges {
+                            eprintln!("mickey: edge exit received at ({x}, {y})");
+                        }
                         match landing(&this_pc, &positions, &peers, index, (x, y), &input) {
                             Some(Landing::Home(here)) => home_at = Some(here),
                             Some(Landing::Peer(next, there)) => hop = Some((next, there)),
@@ -715,6 +729,10 @@ pub fn run(
                 }
             }
             Action::Ungrab => {
+                #[cfg(windows)]
+                if let Some(grab) = grabbed.as_mut() {
+                    grab.landing = home_at;
+                }
                 grabbed = None;
                 if let Focus::Remote(index) = left {
                     report_latency(&peers[index]);
@@ -780,6 +798,13 @@ pub fn run(
                 ));
             }
             Ok(Wake::Input(event)) => {
+                if trace_return_at.is_some()
+                    && let InputEvent::Motion { dx, dy } = event
+                {
+                    trace_motion.0 += i64::from(dx);
+                    trace_motion.1 += i64::from(dy);
+                    trace_motion.2 += 1;
+                }
                 focus_machine.handle(event, &online, &mut act);
                 if let InputEvent::Motion { dx, dy } = event
                     && focus_machine.focus() == Focus::Local
@@ -1130,16 +1155,24 @@ pub fn run(
             println!("{}", mickey_config::i18n::t("messages.quitting"));
             return Ok(());
         }
-        if let Some((x, y)) = home_at
-            && let Err(err) = emit::place(x, y)
-        {
-            eprintln!(
-                "{}",
-                mickey_config::i18n::tf(
-                    "messages.cannot_place_cursor",
-                    &[("err", &err.to_string())]
-                )
-            );
+        if let Some((x, y)) = home_at {
+            if trace_edges {
+                eprintln!("mickey: edge return will place the cursor at ({x}, {y})");
+            }
+            #[cfg(not(windows))]
+            if let Err(err) = crate::input::emit::place(x, y) {
+                eprintln!(
+                    "{}",
+                    mickey_config::i18n::tf(
+                        "messages.cannot_place_cursor",
+                        &[("err", &err.to_string())]
+                    )
+                );
+            }
+            if trace_edges {
+                trace_motion = (0, 0, 0);
+                trace_return_at = Some(Instant::now());
+            }
         }
         if let Some(delta) = pushed
             && edges_matter(&positions, &peers)
