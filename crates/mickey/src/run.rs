@@ -413,19 +413,17 @@ fn run_from_config() -> Result<(), String> {
     let keeper = clipboard::Keeper::start()
         .inspect_err(|err| eprintln!("mickey: {err}; the clipboard will not be shared"))
         .ok();
-    // Transfers get a folder of their own beside the clipboard's received
-    // files, so cleaning either never touches the other's. Copy and paste
-    // triggers them: no clipboard, no transfers.
-    let received = crate::clipboard::received::base()
-        .map(|base| base.join("transfers"))
+    // Fetched files go to Downloads/Mickey, where the owner finds them.
+    // Copy and paste triggers transfers: no clipboard, no transfers.
+    let folder = crate::fs::downloads::mickey_folder()
         .inspect_err(|err| eprintln!("mickey: {err}; copied files will not cross"))
         .ok();
-    let transfers = received.zip(keeper.clone()).map(|(received, keeper)| {
+    let transfers = folder.zip(keeper.clone()).map(|(folder, keeper)| {
         std::sync::Arc::new(crate::transfer::trigger::Transfers::new(
             offers,
             identity,
             this_pc.listen.port(),
-            received,
+            folder,
             trusted.clone(),
             keeper,
         ))

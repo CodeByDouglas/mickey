@@ -23,7 +23,7 @@ lan-mouse, built from scratch to be understood line by line.
 > and a Windows PC, and tested on ten more Linux setups (below). Expect
 > rough edges, and read the [known limits](#known-limits).
 
-**Contents:** [What it does](#what-it-does) · [Screenshots](#screenshots) · [Install](#install) ·
+**Contents:** [What it does](#what-it-does) · [Screenshots](#screenshots) · [Releases](#releases) · [Install](#install) ·
 [First steps](#first-steps) · [Everyday use](#everyday-use) ·
 [Known limits](#known-limits) · [Security](#security) ·
 [Privacy](#privacy) · [Build from source](#build-from-source) ·
@@ -47,11 +47,16 @@ lan-mouse, built from scratch to be understood line by line.
 - **Any PC drives any other.** Every PC runs the same `mickey`; the one
   whose keyboard and mouse you touch is the one in charge.
 - **A shared clipboard that follows the keyboard.** Copy on one PC, move to
-  another, paste: text, images and files (up to 60 MiB). The recent copies
-  are kept in a searchable history, in memory only.
+  another, paste: text and images. Or keep it where it is until you press
+  **AltGr + Right Shift + C**. The recent copies are kept in a searchable
+  history, in memory only.
+- **Copy a folder on one PC, paste it on another.** Files and whole folders
+  of any size cross with plain Ctrl+C and Ctrl+V, encrypted, each file
+  checked, pasted only once all are there. A broken transfer goes on where
+  it stopped, and big ones ask first.
 - **One pair of headphones for every PC.** Pick the PC your headphones are
   on, and every PC's sound plays there, mixed, each at its own volume,
-  with a delay you will not notice (Linux with PipeWire or PulseAudio, and
+  about 25 ms behind what you see (Linux with PipeWire or PulseAudio, and
   Windows).
 - **Finds your PCs and pairs them with a code.** PCs running Mickey on the
   network show up in the settings: press **Connect**, check that both
@@ -69,6 +74,17 @@ lan-mouse, built from scratch to be understood line by line.
 ## Screenshots
 
 <p align="center">
+  <img src="docs/releases/0.6.0/transfer.gif" width="45%" alt="The Ratão running beside the progress bar while files come">
+</p>
+<p align="center"><sub>A folder copied on another PC, on its way: the Ratão runs until every file is there and checked.</sub></p>
+
+<p align="center">
+  <img src="docs/releases/0.6.0/bring.png" width="48%" alt="Bring files from Desk? A small window before a big transfer">
+  <img src="docs/releases/0.6.0/done.png" width="48%" alt="Done: what arrived, and what did not and why">
+</p>
+<p align="center"><sub>Over 1 GB, Mickey asks first · when it is done, it says what did not come, and why.</sub></p>
+
+<p align="center">
   <img src="assets/screenshots/settings-layout.png" width="80%" alt="Settings, Layout tab: Notebook, This PC and Workstation side by side">
 </p>
 <p align="center"><sub>The <b>Layout</b> tab: drag each PC to where its screens sit.</sub></p>
@@ -83,6 +99,11 @@ lan-mouse, built from scratch to be understood line by line.
   <img src="assets/screenshots/switcher.png" width="70%" alt="The switcher: one card per PC, a green dot where the keyboard is">
 </p>
 <p align="center"><sub>The <b>switcher</b>: one card per PC, shown on the screen you are looking at.</sub></p>
+
+<p align="center">
+  <img src="docs/releases/0.6.0/clipboard-choice.png" width="70%" alt="Settings, General tab: share the clipboard automatically, only on a hotkey, or never">
+</p>
+<p align="center"><sub>Settings › <b>General</b>: how the clipboard is shared, and the history.</sub></p>
 
 ## Releases
 
@@ -188,6 +209,7 @@ address…**, and on that PC press **Let a new PC pair (2 min)**.
 | **AltGr + Right Shift** | One other PC: go there, or come back. Two or more: open the switcher |
 | **AltGr + Right Shift + 1** … **+ 9** | Straight to that PC (in the order of the PCs tab) |
 | **AltGr + Right Shift + 0** | Back to this PC |
+| **AltGr + Right Shift + C** | Bring the clipboard of the PC you just left (when *Share the clipboard* is *Only when I press…*) |
 | **AltGr + Up** | Open the switcher |
 | **AltGr + Right** / **AltGr + Left** | The next / previous PC, skipping the offline ones |
 | **Right Shift** twice, quickly | Same as AltGr + Right |
@@ -207,9 +229,12 @@ on the others. Choose its corner in the settings (**General**).
 ### The clipboard and its history
 
 Nothing crosses on every copy: when the keyboard moves from one PC to
-another, what was copied on the first is put on the second. Received files
-land in a fresh folder under Mickey's cache (`~/.cache/mickey/received`,
-`%LOCALAPPDATA%\mickey\received`). **Clipboard history** (tray menu, or
+another, what was copied on the first is put on the second. Copied files
+and folders go as a transfer (next section). Rather choose when? Pick
+*Only when I press AltGr + Right Shift + C* under **Share the clipboard**
+(**General**): the keyboard then moves alone, and that hotkey, pressed on
+the PC you went to within 5 seconds, brings what you copied on the one you
+left. **Clipboard history** (tray menu, or
 `mickey history`) lists the last 50 copies, searchable; pick one to copy it
 again. It lives in memory only and is gone when Mickey stops. Already
 using a clipboard manager (cliphist, CopyQ, Klipper, GPaste, Windows' own
@@ -221,6 +246,35 @@ Rather keep the clipboard to each PC? Pick *Never* under **Share the
 clipboard** (or set `[clipboard] share = "off"`): this PC's keyboard then
 moves without it, and what other PCs sent here before (received files,
 the history) is deleted. Each PC chooses for its own keyboard.
+
+### Copy files and folders
+
+Copy files or a whole folder in your file manager, move the keyboard to
+another PC, and paste with Ctrl+V. Mickey fetches them over the encrypted
+link, checks every file (BLAKE3), and pastes them only once all are there.
+A transfer that takes a while shows its progress in a corner, with
+**Cancel**.
+
+- **Big copies ask first.** Over 1 GB, a small window asks whether to
+  bring them, into `Downloads/Mickey`. The 1 GB, where the window appears
+  and when to suggest cleaning that folder are in **General**. Mickey never
+  deletes what you brought.
+- **It never fills your disk:** a free-space margin is kept, and a transfer
+  that would not fit says so before it starts.
+- **It goes on where it stopped.** A transfer broken by the network, a
+  sleeping PC or Cancel resumes at the exact byte the next time the
+  keyboard crosses with the same copy.
+- **You see what did not come, and why:** a file that changed meanwhile,
+  a link (links inside a folder are left out), a name Windows refuses.
+- **On Windows, files from your own PCs** are marked as from your local
+  network, so SmartScreen and Office do not warn about them; Defender still
+  scans them. **Warn before opening files from other PCs** in **General**
+  brings the warnings back.
+
+With a firewall on, let in **TCP 4244** (the installers do it for you).
+With a PC running Mickey 0.5 or older, copied files still cross the old
+way, whole with the clipboard, up to 60 MiB, into Mickey's cache
+(`~/.cache/mickey/received`, `%LOCALAPPDATA%\mickey\received`).
 
 ### Shared sound
 
@@ -234,7 +288,10 @@ has the headphones, this PC's sound**). Pick **Nobody** and every PC uses
 its own speakers again.
 
 The sound crosses encrypted, only between paired PCs, in 5 ms pieces over
-UDP 4244; nothing is sent while a PC plays nothing. On Windows Mickey
+UDP 4244; nothing is sent while a PC plays nothing. Two PCs' sound cards
+never run at quite the same speed, so the PC that listens plays a hair
+faster or slower, never heard, to keep the delay at about 25 ms for as
+long as it plays. On Windows Mickey
 mutes the speakers while it sends (and unmutes them after, even if it
 ended unexpectedly); on Linux it moves the sound to a silent output of its
 own and puts the real one back when it stops, on Ctrl+C or
@@ -307,7 +364,7 @@ Mickey's log says what it is doing (never which keys you press):
 
 - **Measured on Wi-Fi only.** Between the owner's Windows PC and Arch
   laptop over Wi-Fi: keyboard and mouse p50 2.1 ms, p99 22.6 ms one way;
-  sound about 65 ms. The budgets for a cable (input p99 under 2 ms, sound
+  sound about 25 ms behind (0.6.0, measured both ways with a test tone). The budgets for a cable (input p99 under 2 ms, sound
   p99 under 40 ms) have not been checked: no cable was at hand.
 - **Screen edges on Sway** were checked in a test VM only (a headless
   Sway), not on a real Sway desktop yet. Other wlroots compositors (river,
@@ -445,7 +502,7 @@ tests; [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 | Next | What you get |
 |---|---|
 | **Any desktop** | Native GNOME and KDE support through desktop portals: screen edges everywhere, no `input` group (#178) |
-| **Packages** | AUR, `.deb`, `.rpm`, winget, Scoop (#176) |
+| **Packages** | winget, AUR and Scoop (`.deb` and `.rpm` are out already) (#176) |
 | **macOS** | A first look at whether Mickey can run there (#177) |
 | Someday | Sharing headphones and other USB devices, remote control over the internet |
 
