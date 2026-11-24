@@ -433,3 +433,12 @@ credited in the pull request that uses it, and in the changelog.
   about 375 either way. Also found: the tests' links had no
   `TCP_NODELAY`, unlike every real link, and measured 12 files a second
   on loopback for the same reason; they have it now.
+- **The receiving PC asks for the next files ahead** (2026-11-24): it
+  waited for each file before asking for the next, a round trip per
+  file. It now keeps 8 fetches asked (`transfer/asking.rs`); the other PC
+  answers them in order, as it always did, so older versions need no
+  change. A file to resume is asked for only in its turn. The same 2 277
+  files over Wi-Fi: about 375 entries a second before, 1 886 and 1 949
+  after when Defender had checked them; freshly copied, opening is the
+  limit again, and 16 files opened ahead instead of 8 gave 464 and 468,
+  so the sending PC now opens 16 ahead (`OPEN_AHEAD`).

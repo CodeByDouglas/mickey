@@ -21,8 +21,10 @@ use std::thread::{Builder, Scope, ScopedJoinHandle};
 
 /// How many files are opened ahead. On Windows 10 with Defender on
 /// (2026-11-24), opening 200 small files it had not seen took 2.0 s one at
-/// a time, 0.6 s four at a time and 0.4 s sixteen at a time.
-const OPEN_AHEAD: usize = 8;
+/// a time, 0.6 s four at a time and 0.4 s sixteen at a time; with fetches
+/// asked ahead (`asking`), 2 277 of them crossed at 295 to 409 a second
+/// with 8 opened ahead and 464 to 468 with 16.
+const OPEN_AHEAD: usize = 16;
 
 /// The files being opened ahead, in the order they will be asked for.
 /// Their threads belong to `scope`: none outlives the connection.
@@ -103,12 +105,12 @@ mod tests {
     use crate::transfer::offer;
     use std::io::Read;
 
-    /// A listing of a folder with files `0.txt` to `19.txt` and one empty
+    /// A listing of a folder with files `00.txt` to `39.txt` and one empty
     /// folder, each file holding its own number.
     fn listing(scratch: &Scratch) -> Listing {
         let folder = scratch.0.join("many");
         std::fs::create_dir_all(folder.join("empty")).unwrap();
-        for n in 0..20 {
+        for n in 0..40 {
             std::fs::write(folder.join(format!("{n:02}.txt")), n.to_string()).unwrap();
         }
         offer::list(&[folder]).unwrap()
@@ -145,7 +147,8 @@ mod tests {
             ahead.open_after(1, &listing, fifth);
             assert_eq!(ahead.opening.len(), OPEN_AHEAD, "topped up");
             let last = listing.file(ahead.opening.back().unwrap().index);
-            assert!(last.unwrap().0.ends_with("13.txt"), "in order");
+            let name = format!("{:02}.txt", 5 + OPEN_AHEAD);
+            assert!(last.unwrap().0.ends_with(name), "in order");
         });
     }
 
@@ -168,7 +171,7 @@ mod tests {
     fn nothing_is_opened_past_the_last_file() {
         let scratch = Scratch::new("ahead-end");
         let listing = listing(&scratch);
-        let last = index_of(&listing, "19.txt");
+        let last = index_of(&listing, "39.txt");
         std::thread::scope(|scope| {
             let mut ahead = Ahead::new(scope);
             ahead.open_after(1, &listing, last);

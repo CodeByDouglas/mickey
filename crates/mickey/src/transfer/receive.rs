@@ -17,6 +17,7 @@ use crate::net::invalid;
 use crate::net::secure::Link;
 use crate::platform::space;
 use crate::threads::LockAnyway;
+use crate::transfer::asking::Asking;
 use crate::transfer::hash::{self, HashWrite};
 use crate::transfer::offer::{Kind, Offer};
 use crate::transfer::path;
@@ -117,6 +118,21 @@ fn fetch_all(link: &mut Link, offer: &Offer, into: &Path, fetched: &mut Fetched)
         return Err(room::full(missing));
     }
     fetched.progress.lock_anyway().stage = Stage::Transferring;
+    // The files still to come, in order; one this PC has part of is
+    // asked for in its turn, never ahead.
+    let to_come = offer
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(index, entry)| {
+            matches!(entry.kind, Kind::File { .. }) && !fetched.finished.contains(index)
+        })
+        .map(|(index, _)| {
+            let wire_index = u32::try_from(index).map_err(|_| invalid("too many files".into()));
+            wire_index.map(|wire_index| (wire_index, !fetched.parts.contains(&index)))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let mut asking = Asking::new(offer.id, to_come);
     for (index, entry) in offer.entries.iter().enumerate() {
         if fetched.finished.contains(&index) {
             continue;
@@ -137,7 +153,7 @@ fn fetch_all(link: &mut Link, offer: &Offer, into: &Path, fetched: &mut Fetched)
             // Where the bar stood before this file: its bytes may count
             // while they come, and then the other PC skip it after all.
             let before = fetched.progress.lock_anyway().done;
-            match fetch_file(link, offer.id, wire_index, size, kept, target, fetched) {
+            match fetch_file(link, &mut asking, wire_index, size, kept, target, fetched) {
                 Ok(None) => {
                     fetched.summary.files += 1;
                     // Sizes come from the other PC: never past u64.
@@ -235,10 +251,11 @@ fn kept(fetched: &Fetched, index: usize, target: &Path, size: u64) -> Option<u64
 
 /// Fetches one file into `target`: into a new `.part`, or, if `kept` says
 /// this transfer has one with that many bytes, continuing it. `Some(why)`
-/// if the other PC skipped it.
+/// if the other PC skipped it. `asking` asks for it, if it was not asked
+/// for ahead, and for the next few.
 fn fetch_file(
     link: &mut Link,
-    offer: u64,
+    asking: &mut Asking,
     index: u32,
     size: u64,
     kept: Option<u64>,
@@ -273,7 +290,7 @@ fn fetch_file(
             (file, from)
         }
     };
-    wire::send(link, &Message::Fetch { offer, index, from })?;
+    asking.now(link, index, from)?;
     let folder = part.parent().unwrap_or(&part);
     let result = write_verified(
         link,
@@ -577,6 +594,10 @@ mod tests {
         let id = offer.id;
         let first = big[..300_000].to_vec();
         let breaking = thread::spawn(move || {
+            // Both files are asked for at once (`asking`). Each is read:
+            // closing with one unread would reset the connection, and
+            // could throw away bytes still on their way.
+            serving.recv_bulk().unwrap();
             serving.recv_bulk().unwrap();
             let file = Message::File {
                 index: 1,
