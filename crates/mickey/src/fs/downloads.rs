@@ -11,17 +11,19 @@ pub fn mickey_folder() -> Result<PathBuf, String> {
 }
 
 /// Makes `folder` if it is not there yet. Files from another PC are this
-/// user's alone, not every account's on this one: on Linux it is made
-/// only this user may open (on Windows, the user's folder already is).
-/// One the owner made, or opened up, is left as it is.
+/// user's alone, not every account's on this one: on Linux only this user
+/// may open it (on Windows, the user's folder already is so). One made by
+/// an older Mickey, open to all, is closed too.
 pub fn make(folder: &Path) -> Result<(), String> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
+    let cannot = |err| format!("cannot create {}: {err}", folder.display());
+    std::fs::create_dir_all(folder).map_err(cannot)?;
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    builder
-        .create(folder)
-        .map_err(|err| format!("cannot create {}: {err}", folder.display()))
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))
+            .map_err(|err| format!("cannot protect {}: {err}", folder.display()))?;
+    }
+    Ok(())
 }
 
 /// This user's Downloads folder: on Linux the one `user-dirs.dirs` names
@@ -78,7 +80,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let scratch = crate::test_util::Scratch::new("downloads");
         let folder = scratch.0.join("Downloads/Mickey");
-        make(&folder).unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        let open = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(&folder, open).unwrap();
         make(&folder).expect("there already is fine");
         let mode = std::fs::metadata(&folder).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);

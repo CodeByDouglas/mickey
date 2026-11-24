@@ -37,6 +37,9 @@ pub struct Transfers {
     pub trusted: trust::Shared,
     /// This PC's clipboard, where fetched files are pasted.
     keeper: Keeper,
+    /// Whether abandoned `.part` files were looked for in `folder` since
+    /// Mickey started (`landing`).
+    swept: std::sync::atomic::AtomicBool,
     /// Each file or folder transfers brought here, and the PC it came from:
     /// they are never sent back there (#424). As long as Mickey runs.
     came_from: std::sync::Mutex<Vec<(PathBuf, [u8; 32])>>,
@@ -69,6 +72,7 @@ impl Transfers {
             folder,
             trusted,
             keeper,
+            swept: Default::default(),
             came_from: Default::default(),
             lanes: Default::default(),
             fetches: Default::default(),
@@ -240,7 +244,8 @@ impl Transfers {
     /// they say Ignore.
     fn landing(&self, offer: &FileOffer, who: &str) -> Result<Option<PathBuf>, String> {
         let size = bring::total(&offer.offer);
-        if size > bring::ask_over() && !bring::ask(&offer.offer, who, size, &self.folder) {
+        let asked = size > bring::ask_over();
+        if asked && !bring::ask(&offer.offer, who, size, &self.folder) {
             println!(
                 "mickey: {:.1} GB of files offered, not brought",
                 size as f64 / 1e9
@@ -248,8 +253,13 @@ impl Transfers {
             return Ok(None);
         }
         crate::fs::downloads::make(&self.folder)?;
-        // Only Mickey's own leftovers go, never what the owner brought.
-        crate::transfer::cleanup::remove_abandoned(&self.folder, std::time::SystemTime::now());
+        // Only Mickey's own leftovers go, never what the owner brought. It
+        // walks the whole folder: once a run, and before each big transfer,
+        // not before every small copy.
+        let first = !self.swept.swap(true, std::sync::atomic::Ordering::Relaxed);
+        if first || asked {
+            crate::transfer::cleanup::remove_abandoned(&self.folder, std::time::SystemTime::now());
+        }
         Ok(Some(self.folder.clone()))
     }
 

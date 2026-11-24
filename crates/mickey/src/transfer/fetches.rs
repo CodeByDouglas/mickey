@@ -87,9 +87,9 @@ impl Fetches {
             return Begin::TooMany;
         }
         match fetches.insert(key, Fetch::Running) {
-            // Its folder deleted since (by the owner): nothing to go on
+            // What it wrote deleted since (by the owner): nothing to go on
             // with, so it starts over.
-            Some(Fetch::Broken { into, fetched, .. }) if into.is_dir() => {
+            Some(Fetch::Broken { into, fetched, .. }) if into.is_dir() && fetched.still_there() => {
                 Begin::Resume(into, fetched)
             }
             _ => Begin::Start,
