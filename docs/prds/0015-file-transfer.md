@@ -421,3 +421,15 @@ credited in the pull request that uses it, and in the changelog.
   refused with 18 GB free. Now 1 GB or 5%, at most 5 GB. And a transfer
   that fails before its window opens (no room, the other PC out of reach)
   still shows the window, with why: it went to the log only.
+- **Small files crossed at about 20 a second** from Windows (2026-11-24):
+  a 670 MB `node_modules` of 7 735 files took 7 minutes, and the window
+  said 2 KB/s and 88 hours left while the small files came. Measured: on
+  Windows 10 with Defender on, opening a small file it has not checked
+  yet takes about 10 ms, and the sending PC opened one file at a time.
+  It now opens the next 8 files of the listing while one is sent
+  (`transfer/ahead.rs`). A folder of 2 277 small files, freshly copied so
+  Defender had not checked them, from Windows to Linux over Wi-Fi: 105
+  and 124 entries a second before, 343 and 347 after; already checked,
+  about 375 either way. Also found: the tests' links had no
+  `TCP_NODELAY`, unlike every real link, and measured 12 files a second
+  on loopback for the same reason; they have it now.

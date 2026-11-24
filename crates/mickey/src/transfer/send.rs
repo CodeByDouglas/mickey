@@ -4,16 +4,18 @@
 //! Only files of the offer are ever sent, by their index: the other PC
 //! cannot name a path. Each file is opened without following links and
 //! checked against the listing; one that changed is skipped, not sent
-//! half old and half new.
+//! half old and half new. The next few are opened while one is sent
+//! (`ahead`).
 
 use crate::fs::open;
 use crate::net::invalid;
 use crate::net::secure::Link;
+use crate::transfer::ahead::Ahead;
 use crate::transfer::hash::{self, HashRead};
 use crate::transfer::offer::Listing;
 use crate::transfer::wire::{self, Message, Why};
+use std::fs::File;
 use std::io::{self, Seek, SeekFrom};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -25,38 +27,47 @@ pub fn answer_fetches(
     link: &mut Link,
     find: impl Fn(u64) -> Option<Arc<Listing>>,
 ) -> io::Result<()> {
-    loop {
-        // `recv` passes over `StillHere`: the other PC is re-reading what
-        // it has of a file.
-        let (asked, index, from) = match wire::recv(link) {
-            Ok(Message::Fetch { offer, index, from }) => (offer, index, from),
-            Ok(_) => return Err(invalid("expected a fetch".into())),
-            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
-            Err(err) => return Err(err),
-        };
-        let listing = find(asked).ok_or_else(|| invalid("a fetch for an unknown offer".into()))?;
-        let (path, size, modified) = listing
-            .file(index)
-            .ok_or_else(|| invalid(format!("no file {index} in the offer")))?;
-        if from > size {
-            return Err(invalid(format!("a fetch from byte {from} of {size}")));
+    std::thread::scope(|scope| {
+        let mut ahead = Ahead::new(scope);
+        loop {
+            // `recv` passes over `StillHere`: the other PC is re-reading
+            // what it has of a file.
+            let (asked, index, from) = match wire::recv(link) {
+                Ok(Message::Fetch { offer, index, from }) => (offer, index, from),
+                Ok(_) => return Err(invalid("expected a fetch".into())),
+                Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
+                Err(err) => return Err(err),
+            };
+            let listing =
+                find(asked).ok_or_else(|| invalid("a fetch for an unknown offer".into()))?;
+            let (path, size, modified) = listing
+                .file(index)
+                .ok_or_else(|| invalid(format!("no file {index} in the offer")))?;
+            if from > size {
+                return Err(invalid(format!("a fetch from byte {from} of {size}")));
+            }
+            let file = ahead
+                .take(asked, index)
+                .unwrap_or_else(|| open::to_read(path));
+            ahead.open_after(asked, &listing, index);
+            send_file(link, index, file, size, modified, from)?;
         }
-        send_file(link, index, path, size, modified, from)?;
-    }
+    })
 }
 
-/// Sends the file at `index` from byte `from`, then its hash; or `Skip` if
-/// it is no longer as listed, before or after its bytes.
+/// Sends `file`, the one at `index`, from byte `from`, then its hash; or
+/// `Skip` if it could not be opened or is no longer as listed, before or
+/// after its bytes.
 fn send_file(
     link: &mut Link,
     index: u32,
-    path: &Path,
+    file: io::Result<File>,
     size: u64,
     modified: Option<SystemTime>,
     from: u64,
 ) -> io::Result<()> {
     let skip = |link: &mut Link, why| wire::send(link, &Message::Skip { index, why });
-    let Ok(mut file) = open::to_read(path) else {
+    let Ok(mut file) = file else {
         return skip(link, Why::Gone);
     };
     if !unchanged(&file, size, modified) {

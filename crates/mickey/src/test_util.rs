@@ -35,17 +35,20 @@ impl Drop for Scratch {
 }
 
 /// Two ends of a secure link between two new identities, as two PCs.
+/// `TCP_NODELAY` as every real link has it: without it, each small
+/// message waits for the other side's delayed ACK, and a transfer of
+/// small files measures 12 files a second instead of thousands.
 pub fn link_pair() -> (Link, Link) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let theirs = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
+        stream.set_nodelay(true).unwrap();
         Link::respond(stream, &Identity::generate().unwrap()).unwrap()
     });
-    let ours = Link::initiate(
-        TcpStream::connect(addr).unwrap(),
-        &Identity::generate().unwrap(),
-    );
+    let stream = TcpStream::connect(addr).unwrap();
+    stream.set_nodelay(true).unwrap();
+    let ours = Link::initiate(stream, &Identity::generate().unwrap());
     (ours.unwrap(), theirs.join().unwrap())
 }
 
