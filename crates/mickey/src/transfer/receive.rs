@@ -843,6 +843,8 @@ mod tests {
     /// `small_files_a_second` between two PCs, by hand: on the one with
     /// the files, `MICKEY_BENCH_SERVE=<folder>` serves them once on TCP
     /// 4250; then on the other, `MICKEY_BENCH_FETCH=<its IP>` fetches them.
+    /// It serves whoever connects first, paired or not: only on your own
+    /// network, and only a folder anyone there may have.
     #[test]
     #[ignore]
     fn small_files_a_second_over_the_network() {

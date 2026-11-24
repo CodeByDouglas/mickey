@@ -22,7 +22,7 @@ use std::thread::{Builder, Scope, ScopedJoinHandle};
 /// How many files are opened ahead. On Windows 10 with Defender on
 /// (2026-11-24), opening 200 small files it had not seen took 2.0 s one at
 /// a time, 0.6 s four at a time and 0.4 s sixteen at a time.
-const AHEAD: usize = 8;
+const OPEN_AHEAD: usize = 8;
 
 /// The files being opened ahead, in the order they will be asked for.
 /// Their threads belong to `scope`: none outlives the connection.
@@ -49,7 +49,7 @@ impl<'scope, 'env> Ahead<'scope, 'env> {
 
     /// The file at `index` of `offer`, if it was being opened ahead. Those
     /// opened before it were not asked for (the other PC had them
-    /// already): they are waited for and closed, so no more than `AHEAD`
+    /// already): they are waited for and closed, so no more than `OPEN_AHEAD`
     /// files are ever being opened.
     pub fn take(&mut self, offer: u64, index: u32) -> Option<io::Result<File>> {
         while let Some(next) = self.opening.pop_front() {
@@ -65,13 +65,13 @@ impl<'scope, 'env> Ahead<'scope, 'env> {
     }
 
     /// Starts opening the files of `listing` (offer `offer`) after `index`,
-    /// up to `AHEAD` of them. Folders are skipped: they are not fetched.
+    /// up to `OPEN_AHEAD` of them. Folders are skipped: they are not fetched.
     pub fn open_after(&mut self, offer: u64, listing: &Listing, index: u32) {
         let mut next = match self.opening.back() {
             Some(last) if last.offer == offer => last.index,
             _ => index,
         };
-        while self.opening.len() < AHEAD {
+        while self.opening.len() < OPEN_AHEAD {
             next = match next.checked_add(1) {
                 Some(next) if (next as usize) < listing.entries.len() => next,
                 _ => return,
@@ -136,14 +136,14 @@ mod tests {
             let mut ahead = Ahead::new(scope);
             assert!(ahead.take(1, first).is_none(), "nothing opened yet");
             ahead.open_after(1, &listing, first);
-            assert_eq!(ahead.opening.len(), AHEAD);
+            assert_eq!(ahead.opening.len(), OPEN_AHEAD);
             let second = index_of(&listing, "01.txt");
             assert_eq!(text(ahead.take(1, second)), "1");
             // The other PC had 02 to 04 already: they are closed.
             let fifth = index_of(&listing, "05.txt");
             assert_eq!(text(ahead.take(1, fifth)), "5");
             ahead.open_after(1, &listing, fifth);
-            assert_eq!(ahead.opening.len(), AHEAD, "topped up");
+            assert_eq!(ahead.opening.len(), OPEN_AHEAD, "topped up");
             let last = listing.file(ahead.opening.back().unwrap().index);
             assert!(last.unwrap().0.ends_with("13.txt"), "in order");
         });
