@@ -255,7 +255,7 @@ pub(super) fn serve_source(
                 }
                 emitter.emit(event)
             }
-            transport::Effect::Place { x, y } => emitter.place(x, y),
+            transport::Effect::Place { x, y } => emitter.enter(x, y),
             // Nobody listens when this PC only waits to be controlled.
             transport::Effect::Controlled(here) => {
                 clipboard::sync::focus_changed(grants, peer.ip(), here);

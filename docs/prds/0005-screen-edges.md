@@ -65,6 +65,11 @@ The position is read only while the mouse moves.
 
 ## Discoveries
 
+- **The entry point wins when crossing an edge.** The target receives the
+  entry coordinates before the focus notification. After placing the cursor
+  there, it clears the saved parking position so the focus notification
+  cannot restore the previous exit point. A hotkey switch has no entry
+  coordinates and still restores the saved position.
 - **A free position, not a side.** The first version put each peer on
   one of four sides of the whole desktop, centred (#96, closed). Trying
   it, the owner wanted the laptop next to one particular monitor, in its

@@ -37,15 +37,21 @@ impl Emitter {
             } => windows::scroll(vertical, horizontal),
         }
     }
-
-    /// Puts the cursor at `x, y` of the desktop, where it came in.
-    pub fn place(&mut self, x: i32, y: i32) -> io::Result<()> {
-        place(x, y)
-    }
 }
 
 /// Where the cursor was before `park`, to put it back on `unpark`.
 static PARKED_FROM: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
+
+impl Emitter {
+    /// Places the cursor at the entry point before the focus notification.
+    pub fn enter(&mut self, x: i32, y: i32) -> io::Result<()> {
+        let mut parked = PARKED_FROM.lock_anyway();
+        place(x, y)?;
+        // The subsequent unpark must not restore the previous exit point.
+        *parked = None;
+        Ok(())
+    }
+}
 
 /// Moves the cursor out of sight while another PC has the keyboard and
 /// mouse: into the bottom-right corner, where only its tip's pixel shows.
@@ -271,11 +277,6 @@ impl Emitter {
             }
         }
         self.device.sync()
-    }
-
-    /// Puts the cursor at `x, y` of the desktop, where it came in.
-    pub fn place(&mut self, x: i32, y: i32) -> io::Result<()> {
-        place(x, y)
     }
 }
 
