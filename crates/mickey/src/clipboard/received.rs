@@ -51,15 +51,6 @@ fn save_in(base: &Path, files: Vec<(String, Vec<u8>)>) -> Result<Vec<PathBuf>, S
     Ok(paths)
 }
 
-/// A new, empty folder for one transfer's files (PRD 0015), under `base`
-/// with the other transfers'; the oldest beyond the last few go, except
-/// those in `keep` (transfers that broke, waiting to go on).
-pub fn new_folder(base: &Path, keep: &[PathBuf]) -> Result<PathBuf, String> {
-    let folder = fresh_folder(base)?;
-    prune_except(base, keep);
-    Ok(folder)
-}
-
 /// A new folder under `base`, named by the time, that only this user may
 /// open.
 fn fresh_folder(base: &Path) -> Result<PathBuf, String> {
@@ -96,20 +87,15 @@ fn clear_in(base: &Path) -> Result<(), String> {
 }
 
 /// Removes all but the newest `KEEP` transfer folders. Only folders named
-/// by a time count: `transfers/`, beside them, is left alone.
+/// by a time count: `transfers/`, beside them (where older versions put
+/// fetched files), is left alone.
 fn prune(base: &Path) {
-    prune_except(base, &[]);
-}
-
-/// `prune`, never removing a folder in `keep`.
-fn prune_except(base: &Path, keep: &[PathBuf]) {
     let Ok(read) = std::fs::read_dir(base) else {
         return;
     };
     let mut folders: Vec<(u128, PathBuf)> = read
         .flatten()
         .filter_map(|entry| Some((entry.file_name().to_str()?.parse().ok()?, entry.path())))
-        .filter(|(_, folder)| !keep.contains(folder))
         .collect();
     folders.sort();
     let extra = folders.len().saturating_sub(KEEP);
@@ -130,28 +116,14 @@ mod tests {
         assert_eq!(std::fs::read(&paths[0]).unwrap(), b"hello");
         assert!(paths[0].starts_with(&base));
         assert!(save_in(&base, vec![("../x".into(), vec![])]).is_err());
+        std::fs::create_dir_all(base.join("transfers")).unwrap();
         for _ in 0..KEEP + 2 {
             save_in(&base, vec![("b".into(), vec![])]).unwrap();
         }
-        assert_eq!(std::fs::read_dir(&base).unwrap().count(), KEEP);
+        assert!(base.join("transfers").exists(), "not a time: left alone");
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), KEEP + 1);
         clear_in(&base).unwrap();
         assert!(!base.exists(), "every received file is gone");
         clear_in(&base).expect("clearing nothing is fine");
-    }
-
-    #[test]
-    fn a_waiting_transfer_and_the_transfers_folder_are_never_cleaned() {
-        let base = std::env::temp_dir().join(format!("mickey-keep-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("transfers")).unwrap();
-        let waiting = new_folder(&base, &[]).unwrap();
-        for _ in 0..KEEP + 2 {
-            new_folder(&base, std::slice::from_ref(&waiting)).unwrap();
-        }
-        assert!(waiting.exists(), "a broken transfer waits to go on");
-        assert!(base.join("transfers").exists(), "not a time: left alone");
-        let folders = std::fs::read_dir(&base).unwrap().count();
-        assert_eq!(folders, KEEP + 2, "the newest, the waiting one, transfers/");
-        clear_in(&base).unwrap();
     }
 }

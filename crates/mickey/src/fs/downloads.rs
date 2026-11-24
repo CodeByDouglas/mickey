@@ -1,16 +1,27 @@
-//! The folder brought files go to (PRD 0015): `Mickey` in this user's
+//! The folder fetched files go to (PRD 0015): `Mickey` in this user's
 //! Downloads folder.
 
 use std::path::{Path, PathBuf};
 
-/// `Downloads/Mickey`, made if it is not there yet.
+/// `Downloads/Mickey`; not made here, only once files come (`make`).
 pub fn mickey_folder() -> Result<PathBuf, String> {
-    let folder = downloads()
+    Ok(downloads()
         .ok_or("no Downloads folder for this user")?
-        .join("Mickey");
-    std::fs::create_dir_all(&folder)
-        .map_err(|err| format!("cannot create {}: {err}", folder.display()))?;
-    Ok(folder)
+        .join("Mickey"))
+}
+
+/// Makes `folder` if it is not there yet. Files from another PC are this
+/// user's alone, not every account's on this one: on Linux it is made
+/// only this user may open (on Windows, the user's folder already is).
+/// One the owner made, or opened up, is left as it is.
+pub fn make(folder: &Path) -> Result<(), String> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+        .create(folder)
+        .map_err(|err| format!("cannot create {}: {err}", folder.display()))
 }
 
 /// This user's Downloads folder: on Linux the one `user-dirs.dirs` names
@@ -59,5 +70,17 @@ mod tests {
         );
         assert_eq!(download_dir("XDG_DOWNLOAD_DIR=\"/tmp\"", home), None);
         assert_eq!(download_dir("", home), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_mickey_folder_is_this_users_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = crate::test_util::Scratch::new("downloads");
+        let folder = scratch.0.join("Downloads/Mickey");
+        make(&folder).unwrap();
+        make(&folder).expect("there already is fine");
+        let mode = std::fs::metadata(&folder).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
     }
 }

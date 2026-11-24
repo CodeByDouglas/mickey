@@ -34,9 +34,8 @@ pub type Key = ([u8; 32], u64);
 
 /// What became of one offer.
 enum Fetch {
-    /// Being fetched now, or waiting its turn; into this folder once it
-    /// has one.
-    Running(Option<PathBuf>),
+    /// Being fetched now, or waiting its turn.
+    Running,
     /// Stopped (the network, a sleeping PC, a full disk, Cancel): what it
     /// had done, and where, to go on; since when.
     Broken {
@@ -70,7 +69,7 @@ impl Fetches {
     pub fn begin(&self, key: Key) -> Begin {
         let mut fetches = self.0.lock_anyway();
         match fetches.get(&key) {
-            Some(Fetch::Running(_)) => return Begin::Skip,
+            Some(Fetch::Running) => return Begin::Skip,
             // All skipped by the other PC, it is fetched again: nothing
             // was pasted, and the files may be steady now.
             Some(Fetch::Done { landed, .. })
@@ -82,25 +81,19 @@ impl Fetches {
         }
         let running = fetches
             .iter()
-            .filter(|(other, fetch)| other.0 == key.0 && matches!(fetch, Fetch::Running(_)))
+            .filter(|(other, fetch)| other.0 == key.0 && matches!(fetch, Fetch::Running))
             .count();
         if running >= MAX_RUNNING {
             return Begin::TooMany;
         }
-        match fetches.insert(key, Fetch::Running(None)) {
-            // Its folder deleted since (by the owner, or the received
-            // folder emptied): nothing to go on with, so it starts over.
+        match fetches.insert(key, Fetch::Running) {
+            // Its folder deleted since (by the owner): nothing to go on
+            // with, so it starts over.
             Some(Fetch::Broken { into, fetched, .. }) if into.is_dir() => {
-                fetches.insert(key, Fetch::Running(Some(into.clone())));
                 Begin::Resume(into, fetched)
             }
             _ => Begin::Start,
         }
-    }
-
-    /// Records the folder `key`, now running, writes into.
-    pub fn running_in(&self, key: Key, into: PathBuf) {
-        self.0.lock_anyway().insert(key, Fetch::Running(Some(into)));
     }
 
     /// Records that `key` is all here, at `landed`.
@@ -130,21 +123,6 @@ impl Fetches {
             _ => None,
         };
         forget_oldest(&mut fetches, broken, MAX_BROKEN);
-    }
-
-    /// The folders of transfers running, waiting their turn, or broken and
-    /// waiting to go on: never cleaned away, or they would lose files or
-    /// start over.
-    pub fn waiting(&self) -> Vec<PathBuf> {
-        self.0
-            .lock_anyway()
-            .values()
-            .filter_map(|fetch| match fetch {
-                Fetch::Running(into) => into.clone(),
-                Fetch::Broken { into, .. } => Some(into.clone()),
-                Fetch::Done { .. } => None,
-            })
-            .collect()
     }
 
     /// Forgets `key`: the owner said Ignore, or it could not start.
@@ -224,18 +202,6 @@ mod tests {
     }
 
     #[test]
-    fn a_running_transfers_folder_is_never_cleaned_away() {
-        let fetches = Fetches::default();
-        let key = ([1; 32], 1);
-        assert!(matches!(fetches.begin(key), Begin::Start));
-        assert!(fetches.waiting().is_empty(), "no folder yet");
-        fetches.running_in(key, "/received/1".into());
-        assert_eq!(fetches.waiting(), [PathBuf::from("/received/1")]);
-        fetches.done(key, vec![PathBuf::from("/received/1/a.txt")]);
-        assert!(fetches.waiting().is_empty(), "done: like any other");
-    }
-
-    #[test]
     fn one_pc_has_only_so_many_transfers_going() {
         let fetches = Fetches::default();
         for id in 0..MAX_RUNNING as u64 {
@@ -262,14 +228,15 @@ mod tests {
     #[test]
     fn another_pcs_broken_transfers_are_not_pushed_out() {
         let fetches = Fetches::default();
+        let folder = std::env::temp_dir();
         fetches.begin(([1; 32], 0));
-        fetches.broke(([1; 32], 0), "/received/a".into(), Fetched::default());
+        fetches.broke(([1; 32], 0), folder.clone(), Fetched::default());
         for id in 0..MAX_BROKEN as u64 + 3 {
             let key = ([2; 32], id);
             fetches.begin(key);
-            fetches.broke(key, format!("/received/{id}").into(), Fetched::default());
+            fetches.broke(key, folder.clone(), Fetched::default());
         }
-        assert!(fetches.waiting().contains(&PathBuf::from("/received/a")));
+        assert!(matches!(fetches.begin(([1; 32], 0)), Begin::Resume(..)));
     }
 
     #[test]
@@ -284,18 +251,21 @@ mod tests {
     #[test]
     fn only_the_newest_broken_transfers_are_kept() {
         let fetches = Fetches::default();
+        let folder = std::env::temp_dir();
         for id in 0..MAX_BROKEN as u64 + 3 {
             let key = ([2; 32], id);
             fetches.begin(key);
-            fetches.broke(key, format!("/received/{id}").into(), Fetched::default());
+            fetches.broke(key, folder.clone(), Fetched::default());
         }
-        let waiting = fetches.waiting();
-        assert_eq!(waiting.len(), MAX_BROKEN);
+        let broken = |fetch: &&Fetch| matches!(fetch, Fetch::Broken { .. });
+        let kept = fetches.0.lock_anyway().values().filter(broken).count();
+        assert_eq!(kept, MAX_BROKEN);
+        let newest = ([2; 32], MAX_BROKEN as u64 + 2);
+        assert!(matches!(fetches.begin(newest), Begin::Resume(..)));
         assert!(
-            !waiting.contains(&PathBuf::from("/received/0")),
-            "the oldest goes"
+            matches!(fetches.begin(([2; 32], 0)), Begin::Start),
+            "the oldest starts over"
         );
-        assert!(waiting.contains(&PathBuf::from(format!("/received/{}", MAX_BROKEN + 2))));
     }
 
     #[test]
