@@ -158,12 +158,15 @@ mod windows {
     /// While this lives, the hooks swallow every event.
     pub struct Grabbed<'a> {
         anchor: Arc<Mutex<Option<Point>>>,
+        /// Where the cursor goes when the grab ends: where it came back
+        /// across an edge, if it did (#554).
+        pub landing: Option<(i32, i32)>,
         _input: PhantomData<&'a Input>,
     }
 
     impl Drop for Grabbed<'_> {
         fn drop(&mut self) {
-            hooks::set_swallow(false);
+            hooks::set_swallow(false, self.landing);
             *self.anchor.lock_anyway() = None;
         }
     }
@@ -216,9 +219,10 @@ mod windows {
         /// Pins the cursor where it is and starts swallowing.
         pub fn grab(&self) -> Result<Grabbed<'_>, String> {
             *self.anchor.lock_anyway() = Some(hooks::cursor_pos());
-            hooks::set_swallow(true);
+            hooks::set_swallow(true, None);
             Ok(Grabbed {
                 anchor: Arc::clone(&self.anchor),
+                landing: None,
                 _input: PhantomData,
             })
         }

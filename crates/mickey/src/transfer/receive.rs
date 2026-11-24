@@ -74,6 +74,16 @@ impl Fetched {
     pub fn started(&self) -> bool {
         !self.finished.is_empty() || !self.parts.is_empty() || !self.claimed.is_empty()
     }
+
+    /// Whether what it put in its folder is still there: each top-level
+    /// file or folder it started writing, or that file's `.part`. Once the
+    /// owner deleted one, going on would paste it with files missing.
+    pub fn still_there(&self) -> bool {
+        let there = |path: &Path| path.symlink_metadata().is_ok();
+        self.claimed
+            .iter()
+            .all(|top| there(top) || there(&part_of(top)))
+    }
 }
 
 /// Fetches every file of `offer` into the folder `into`, or what is left of
@@ -150,6 +160,10 @@ fn fetch_all(link: &mut Link, offer: &Offer, into: &Path, fetched: &mut Fetched)
                     progress.advance(done, std::time::Instant::now());
                     drop(progress);
                     fetched.summary.skipped.push((entry.path.clone(), why));
+                    // A copied file the other PC skipped was never put here.
+                    if target == top {
+                        fetched.claimed.remove(top);
+                    }
                 }
                 Err(err) => {
                     // Kept for next time unless it was thrown away (damaged,
@@ -885,5 +899,22 @@ mod tests {
                 entries as f64 / took
             );
         }
+    }
+
+    #[test]
+    fn a_transfer_whose_files_were_deleted_is_not_there_to_go_on() {
+        let scratch = sides("deleted");
+        let mut fetched = Fetched::default();
+        assert!(fetched.still_there(), "nothing written yet");
+        let fotos = scratch.0.join("into/fotos");
+        fetched.claimed.insert(fotos.clone());
+        std::fs::create_dir_all(&fotos).unwrap();
+        assert!(fetched.still_there());
+        let notes = scratch.0.join("into/notes.txt");
+        fetched.claimed.insert(notes.clone());
+        std::fs::write(part_of(&notes), b"half").unwrap();
+        assert!(fetched.still_there(), "a file on its way counts");
+        std::fs::remove_dir_all(&fotos).unwrap();
+        assert!(!fetched.still_there(), "the owner deleted fotos/");
     }
 }
