@@ -158,6 +158,8 @@ mod windows {
     /// While this lives, the hooks swallow every event.
     pub struct Grabbed<'a> {
         anchor: Arc<Mutex<Option<Point>>>,
+        /// Where the cursor goes when the grab ends: where it came back
+        /// across an edge, if it did (#554).
         pub landing: Option<(i32, i32)>,
         _input: PhantomData<&'a Input>,
     }
