@@ -11,6 +11,9 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
+- Folders of many small files (a node_modules) cross from Windows about
+  three times faster: Mickey opens the next files while one is sent.
+
 ## 0.6.0
 
 - Shared sound stays in step with what you see: it used to arrive up to
