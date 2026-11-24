@@ -546,6 +546,9 @@ mod tests {
 
     #[test]
     fn the_target_places_on_enter_and_says_once_when_pushed_off() {
+        use std::sync::atomic::{AtomicI32, Ordering};
+
+        static CURSOR_Y: AtomicI32 = AtomicI32::new(0);
         let (listener, addr) = listener();
         let target = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -568,30 +571,35 @@ mod tests {
                     }
                     true
                 },
-                || Some((1535, 284)),
+                || Some((1535, CURSOR_Y.load(Ordering::Relaxed))),
                 || true,
             );
             (result, placed)
         });
         let mut link = source(addr);
-        link.send(&Message::Enter { x: 1535, y: 284 }).unwrap();
         let push = Message::Input(InputEvent::Motion { dx: 4, dy: 0 });
-        link.send(&push).unwrap();
-        // Still pushing a moment later: edges are checked at most every
-        // EDGE_CHECK, with the motion summed in between.
-        thread::sleep(edges::EDGE_CHECK + std::time::Duration::from_millis(2));
-        link.send(&push).unwrap();
-        // The answer comes from the edge thread: the next motion carries it.
-        thread::sleep(std::time::Duration::from_millis(20));
-        link.send(&push).unwrap();
-        assert_eq!(link.recv().unwrap(), Message::Leave { x: 1536, y: 284 });
-        // Only once: the next message is the pong, not a second Leave.
-        link.send(&Message::Ping { id: 7 }).unwrap();
-        assert_eq!(link.recv().unwrap(), Message::Pong { id: 7 });
+        // Enter near the top and return near the bottom twice on one link.
+        for (id, entry_y, exit_y) in [(7, 100, 730), (8, 150, 810)] {
+            CURSOR_Y.store(exit_y, Ordering::Relaxed);
+            link.send(&Message::Enter {
+                x: 1535,
+                y: entry_y,
+            })
+            .unwrap();
+            link.send(&push).unwrap();
+            thread::sleep(edges::EDGE_CHECK + std::time::Duration::from_millis(2));
+            link.send(&push).unwrap();
+            // The answer comes from the edge thread: the next motion carries it.
+            thread::sleep(std::time::Duration::from_millis(20));
+            link.send(&push).unwrap();
+            assert_eq!(link.recv().unwrap(), Message::Leave { x: 1536, y: exit_y });
+            link.send(&Message::Ping { id }).unwrap();
+            assert_eq!(link.recv().unwrap(), Message::Pong { id });
+        }
         drop(link);
         let (result, placed) = target.join().unwrap();
         assert!(result.is_ok());
-        assert_eq!(placed, [(1535, 284)]);
+        assert_eq!(placed, [(1535, 100), (1535, 150)]);
     }
 
     #[test]
