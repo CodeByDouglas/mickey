@@ -15,7 +15,9 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
 const WH_KEYBOARD_LL: i32 = 13;
-/// Thread messages that turn the mouse hook on and off (`WM_APP` + n).
+/// Thread messages that turn the mouse hook on and off (`WM_APP` + n);
+/// `MOUSE_OFF_AT` also puts the cursor at the point its `wParam` and
+/// `lParam` carry.
 const MOUSE_ON: u32 = 0x8000 + 1;
 const MOUSE_OFF: u32 = 0x8000 + 2;
 const MOUSE_OFF_AT: u32 = 0x8000 + 3;
@@ -312,33 +314,20 @@ pub fn start(events: Sender<HookEvent>) -> io::Result<()> {
                         unsafe { UnhookWindowsHookEx(mouse) };
                         mouse = 0;
                     }
+                    // Placed here, once the hook is off: motion swallowed
+                    // while it was on is behind us, and cannot pull the
+                    // cursor back to where it left (#554).
                     if msg.message == MOUSE_OFF_AT {
+                        // `set_swallow` packed the point; `as` takes it back.
                         let (x, y) = (msg.wparam as i32, msg.lparam as i32);
-                        let tracing = std::env::var_os("MICKEY_TRACE_EDGES").is_some();
-                        if tracing {
-                            let point = cursor_pos();
+                        if let Err(err) = crate::platform::windows::set_cursor_pos(x, y) {
                             eprintln!(
-                                "mickey: edge return cursor before placement: ({}, {})",
-                                point.x, point.y
-                            );
-                        }
-                        match crate::platform::windows::set_cursor_pos(x, y) {
-                            Ok(()) => {
-                                if tracing {
-                                    let point = cursor_pos();
-                                    eprintln!(
-                                        "mickey: edge return cursor after releasing the mouse: ({}, {})",
-                                        point.x, point.y
-                                    );
-                                }
-                            }
-                            Err(err) => eprintln!(
                                 "{}",
                                 mickey_config::i18n::tf(
                                     "messages.cannot_place_cursor",
                                     &[("err", &err.to_string())]
                                 )
-                            ),
+                            );
                         }
                     }
                     if let Some(focus) = &focus {
@@ -568,6 +557,8 @@ unsafe extern "system" fn default_proc(
 }
 
 /// While `true`, every hooked event is swallowed, and the mouse is hooked.
+/// Turned off with a `landing`, the hook thread puts the cursor there once
+/// the mouse hook is off.
 pub fn set_swallow(on: bool, landing: Option<(i32, i32)>) {
     if let Some(shared) = SHARED.get() {
         shared.swallow.store(on, Ordering::SeqCst);

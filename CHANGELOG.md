@@ -11,6 +11,9 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 ## Unreleased
 
+- Coming back across a screen edge, the cursor stays where it came in:
+  it could jump back to where it had left (thanks, EliasNote).
+
 ## 0.6.0
 
 - Shared sound stays in step with what you see: it used to arrive up to

@@ -40,16 +40,14 @@ impl Emitter {
 }
 
 /// Where the cursor was before `park`, to put it back on `unpark`.
-static PARKED_FROM: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
+static PARKED: Parking = Parking(std::sync::Mutex::new(None));
 
 impl Emitter {
-    /// Places the cursor at the entry point before the focus notification.
+    /// Puts the cursor at `x, y` of the desktop, where it came in across
+    /// an edge. The focus news that follows must not put it back where it
+    /// was parked from: that is where it left, not where it came in (#554).
     pub fn enter(&mut self, x: i32, y: i32) -> io::Result<()> {
-        let mut parked = PARKED_FROM.lock_anyway();
-        place(x, y)?;
-        // The subsequent unpark must not restore the previous exit point.
-        *parked = None;
-        Ok(())
+        PARKED.entered(|| place(x, y))
     }
 }
 
@@ -61,18 +59,46 @@ pub fn park() {
     let Some(corner) = crate::monitors::this_pc().ok().as_deref().and_then(corner) else {
         return;
     };
-    let mut parked = PARKED_FROM.lock_anyway();
-    if parked.is_none() {
-        *parked = cursor();
-    }
+    PARKED.park(cursor);
     let _ = place(corner.0, corner.1);
 }
 
-/// Puts the cursor back where `park` found it, if it was parked.
+/// Puts the cursor back where `park` found it, if it was parked and has
+/// not come in across an edge since.
 pub fn unpark() {
-    let from = PARKED_FROM.lock_anyway().take();
-    if let Some((x, y)) = from {
+    if let Some((x, y)) = PARKED.unpark() {
         let _ = place(x, y);
+    }
+}
+
+/// Where the cursor was when it was parked, if it is still to go back
+/// there. Kept apart from moving the cursor, so the order of park, enter
+/// and unpark can be tested.
+struct Parking(std::sync::Mutex<Option<(i32, i32)>>);
+
+impl Parking {
+    /// Remembers where `cursor` says it is, unless already parked (parking
+    /// twice must not forget where it was before the first).
+    fn park(&self, cursor: impl FnOnce() -> Option<(i32, i32)>) {
+        let mut parked = self.0.lock_anyway();
+        if parked.is_none() {
+            *parked = cursor();
+        }
+    }
+
+    /// Where to put the cursor back, once.
+    fn unpark(&self) -> Option<(i32, i32)> {
+        self.0.lock_anyway().take()
+    }
+
+    /// The cursor came in across an edge: `place` puts it there, and the
+    /// parked position is forgotten. Held while placing, so a `park` from
+    /// another source in between remembers the new place, not the old.
+    fn entered(&self, place: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
+        let mut parked = self.0.lock_anyway();
+        place()?;
+        *parked = None;
+        Ok(())
     }
 }
 
@@ -316,8 +342,43 @@ mod path_tests {
 
 #[cfg(test)]
 mod park_tests {
-    use super::corner;
+    use super::{Parking, corner};
     use crate::monitors::Monitor;
+    use std::sync::Mutex;
+
+    #[test]
+    fn coming_in_across_an_edge_is_not_undone_by_unparking() {
+        let parked = Parking(Mutex::new(None));
+        // It left near the top: parked from there.
+        parked.park(|| Some((1919, 120)));
+        // It comes back in near the bottom, then the focus news unparks.
+        let mut placed = None;
+        let place = || {
+            placed = Some((0, 885));
+            Ok(())
+        };
+        parked.entered(place).unwrap();
+        assert_eq!(placed, Some((0, 885)));
+        assert_eq!(parked.unpark(), None, "not back to where it left (#554)");
+    }
+
+    #[test]
+    fn the_hotkey_puts_the_cursor_back_where_it_was_parked() {
+        let parked = Parking(Mutex::new(None));
+        parked.park(|| Some((500, 300)));
+        parked.park(|| Some((1919, 1079)));
+        assert_eq!(parked.unpark(), Some((500, 300)), "not the corner");
+        assert_eq!(parked.unpark(), None, "once");
+    }
+
+    #[test]
+    fn a_place_that_fails_keeps_where_to_go_back() {
+        let parked = Parking(Mutex::new(None));
+        parked.park(|| Some((500, 300)));
+        let failed = parked.entered(|| Err(std::io::Error::other("no portal")));
+        assert!(failed.is_err());
+        assert_eq!(parked.unpark(), Some((500, 300)));
+    }
 
     #[test]
     fn the_corner_is_the_right_most_monitors_last_pixel() {
