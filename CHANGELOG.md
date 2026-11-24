@@ -13,6 +13,8 @@ only: no arrows or emoji, which Mickey's font may not have.
 
 - Coming back across a screen edge, the cursor stays where it came in:
   it could jump back to where it had left (thanks, EliasNote).
+- Files copied on another PC now arrive in Downloads/Mickey, where you
+  can find them, even small ones: they went to a hidden folder before.
 
 ## 0.6.0
 
