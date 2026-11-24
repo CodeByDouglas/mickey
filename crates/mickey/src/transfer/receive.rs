@@ -824,6 +824,83 @@ mod tests {
         );
     }
 
+    /// How many files a second cross, many small ones: those in
+    /// `MICKEY_BENCH_DIR` (a real `node_modules`, where an antivirus
+    /// checks every file opened), or 3 000 made here. Run by hand:
+    /// `MICKEY_BENCH_DIR=... cargo test --release small_files_a_second
+    /// -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn small_files_a_second() {
+        let scratch = sides("bench");
+        let folder = match std::env::var_os("MICKEY_BENCH_DIR") {
+            Some(dir) => PathBuf::from(dir),
+            None => {
+                for i in 0..3000 {
+                    scratch.file(format!("from/nm/d{}/f{i}.js", i % 50), &[b'x'; 600]);
+                }
+                scratch.0.join("from/nm")
+            }
+        };
+        let listing = offer::list(&[folder]).unwrap();
+        let files = listing.local.len();
+        let offer = listing.offer(7);
+        let start = std::time::Instant::now();
+        transfer(listing, &offer, &scratch.0.join("into")).unwrap();
+        let took = start.elapsed().as_secs_f64();
+        eprintln!(
+            "{files} entries in {took:.1} s: {:.0} a second",
+            files as f64 / took
+        );
+    }
+
+    /// `small_files_a_second` between two PCs, by hand: on the one with
+    /// the files, `MICKEY_BENCH_SERVE=<folder>` serves them once on TCP
+    /// 4250; then on the other, `MICKEY_BENCH_FETCH=<its IP>` fetches them.
+    /// It serves whoever connects first, paired or not: only on your own
+    /// network, and only a folder anyone there may have.
+    #[test]
+    #[ignore]
+    fn small_files_a_second_over_the_network() {
+        use crate::net::identity::Identity;
+        use std::net::{TcpListener, TcpStream};
+        const PORT: u16 = 4250;
+        if let Some(folder) = std::env::var_os("MICKEY_BENCH_SERVE") {
+            let listing = offer::list(&[PathBuf::from(folder)]).unwrap();
+            let (stream, _) = TcpListener::bind(("0.0.0.0", PORT))
+                .unwrap()
+                .accept()
+                .unwrap();
+            stream.set_nodelay(true).unwrap();
+            let mut link = Link::respond(stream, &Identity::generate().unwrap()).unwrap();
+            let offer = wire::encode(&Message::Offer(listing.offer(7)));
+            link.send_bulk(&offer).unwrap();
+            send::answer_fetches(&mut link, only(listing, 7)).unwrap();
+        } else if let Ok(ip) = std::env::var("MICKEY_BENCH_FETCH") {
+            let stream = TcpStream::connect((ip.as_str(), PORT)).unwrap();
+            stream.set_nodelay(true).unwrap();
+            let mut link = Link::initiate(stream, &Identity::generate().unwrap()).unwrap();
+            let Message::Offer(offer) = wire::decode(&link.recv_bulk().unwrap()).unwrap() else {
+                panic!("the other PC sends its offer first");
+            };
+            let scratch = sides("bench-network");
+            let start = std::time::Instant::now();
+            fetch(
+                &mut link,
+                &offer,
+                &scratch.0.join("into"),
+                &mut Fetched::default(),
+            )
+            .unwrap();
+            let took = start.elapsed().as_secs_f64();
+            let entries = offer.entries.len();
+            eprintln!(
+                "{entries} entries in {took:.1} s: {:.0} a second",
+                entries as f64 / took
+            );
+        }
+    }
+
     #[test]
     fn a_transfer_whose_files_were_deleted_is_not_there_to_go_on() {
         let scratch = sides("deleted");

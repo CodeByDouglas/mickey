@@ -15,6 +15,8 @@ only: no arrows or emoji, which Mickey's font may not have.
   it could jump back to where it had left (thanks, EliasNote).
 - Files copied on another PC now arrive in Downloads/Mickey, where you
   can find them, even small ones: they went to a hidden folder before.
+- Folders of many small files (a node_modules) cross from Windows about
+  three times faster: Mickey opens the next files while one is sent.
 
 ## 0.6.0
 
