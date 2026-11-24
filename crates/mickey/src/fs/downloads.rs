@@ -1,16 +1,29 @@
-//! The folder brought files go to (PRD 0015): `Mickey` in this user's
+//! The folder fetched files go to (PRD 0015): `Mickey` in this user's
 //! Downloads folder.
 
 use std::path::{Path, PathBuf};
 
-/// `Downloads/Mickey`, made if it is not there yet.
+/// `Downloads/Mickey`; not made here, only once files come (`make`).
 pub fn mickey_folder() -> Result<PathBuf, String> {
-    let folder = downloads()
+    Ok(downloads()
         .ok_or("no Downloads folder for this user")?
-        .join("Mickey");
-    std::fs::create_dir_all(&folder)
-        .map_err(|err| format!("cannot create {}: {err}", folder.display()))?;
-    Ok(folder)
+        .join("Mickey"))
+}
+
+/// Makes `folder` if it is not there yet. Files from another PC are this
+/// user's alone, not every account's on this one: on Linux only this user
+/// may open it (on Windows, the user's folder already is so). One made by
+/// an older Mickey, open to all, is closed too.
+pub fn make(folder: &Path) -> Result<(), String> {
+    let cannot = |err| format!("cannot create {}: {err}", folder.display());
+    std::fs::create_dir_all(folder).map_err(cannot)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))
+            .map_err(|err| format!("cannot protect {}: {err}", folder.display()))?;
+    }
+    Ok(())
 }
 
 /// This user's Downloads folder: on Linux the one `user-dirs.dirs` names
@@ -59,5 +72,19 @@ mod tests {
         );
         assert_eq!(download_dir("XDG_DOWNLOAD_DIR=\"/tmp\"", home), None);
         assert_eq!(download_dir("", home), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_mickey_folder_is_this_users_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = crate::test_util::Scratch::new("downloads");
+        let folder = scratch.0.join("Downloads/Mickey");
+        std::fs::create_dir_all(&folder).unwrap();
+        let open = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(&folder, open).unwrap();
+        make(&folder).expect("there already is fine");
+        let mode = std::fs::metadata(&folder).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
     }
 }

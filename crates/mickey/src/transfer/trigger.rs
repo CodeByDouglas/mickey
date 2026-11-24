@@ -29,13 +29,17 @@ pub struct Transfers {
     pub identity: Arc<Identity>,
     /// This PC's input port, which its offers name.
     pub port: u16,
-    /// Where fetched files go, a fresh folder per transfer: `transfers/`
-    /// in the received files' folder (`clipboard::received::base`).
-    pub received: PathBuf,
+    /// Where fetched files go: `Downloads/Mickey` (`fs::downloads`), made
+    /// once files come. Each copied file or folder keeps its name there, or
+    /// gets `name (2)`.
+    pub folder: PathBuf,
     /// Files are fetched only from a paired PC.
     pub trusted: trust::Shared,
     /// This PC's clipboard, where fetched files are pasted.
     keeper: Keeper,
+    /// Whether abandoned `.part` files were looked for in `folder` since
+    /// Mickey started (`landing`).
+    swept: std::sync::atomic::AtomicBool,
     /// Each file or folder transfers brought here, and the PC it came from:
     /// they are never sent back there (#424). As long as Mickey runs.
     came_from: std::sync::Mutex<Vec<(PathBuf, [u8; 32])>>,
@@ -51,13 +55,13 @@ pub struct Transfers {
 
 impl Transfers {
     /// Offers this PC's copied files from `offers`, as `identity`, naming
-    /// `port`; fetches others' into `received`, from paired PCs only, and
+    /// `port`; fetches others' into `folder`, from paired PCs only, and
     /// pastes them in `keeper`'s clipboard.
     pub fn new(
         offers: Arc<Offers>,
         identity: Arc<Identity>,
         port: u16,
-        received: PathBuf,
+        folder: PathBuf,
         trusted: trust::Shared,
         keeper: Keeper,
     ) -> Transfers {
@@ -65,9 +69,10 @@ impl Transfers {
             offers,
             identity,
             port,
-            received,
+            folder,
             trusted,
             keeper,
+            swept: Default::default(),
             came_from: Default::default(),
             lanes: Default::default(),
             fetches: Default::default(),
@@ -145,7 +150,6 @@ impl Transfers {
                 Begin::Resume(into, fetched) => (into, *fetched),
                 Begin::Start => match this.landing(&offer, &who) {
                     Ok(Some(into)) => {
-                        this.fetches.running_in(key, into.clone());
                         let mark = crate::fs::mark::Mark::configured(&who);
                         (into, Fetched::marked(mark))
                     }
@@ -175,14 +179,8 @@ impl Transfers {
             match result {
                 Ok(landed) => this.fetches.done(key, landed),
                 // Nothing arrived (out of reach, a firewall, an offer the
-                // other PC no longer has): nothing to go on with, and the
-                // empty folder goes. Downloads/Mickey itself stays.
-                Err(_) if !fetched.started() => {
-                    this.fetches.forget(key);
-                    if into.starts_with(&this.received) {
-                        let _ = std::fs::remove_dir(&into);
-                    }
-                }
+                // other PC no longer has): nothing to go on with.
+                Err(_) if !fetched.started() => this.fetches.forget(key),
                 Err(_) => this.fetches.broke(key, into, fetched),
             }
         });
@@ -241,26 +239,28 @@ impl Transfers {
         self.receive(offer, &mut link, into, fetched)
     }
 
-    /// Where `offer`'s files go: a fresh folder among the received ones; or,
-    /// over `bring::ask_over()`, `Downloads/Mickey` if the owner says Bring, and
-    /// `None` if they say Ignore.
+    /// Where `offer`'s files go: `self.folder`, where the owner finds them;
+    /// over `bring::ask_over()` only if the owner says Bring, `None` if
+    /// they say Ignore.
     fn landing(&self, offer: &FileOffer, who: &str) -> Result<Option<PathBuf>, String> {
         let size = bring::total(&offer.offer);
-        if size <= bring::ask_over() {
-            let waiting = self.fetches.waiting();
-            return crate::clipboard::received::new_folder(&self.received, &waiting).map(Some);
-        }
-        let folder = crate::fs::downloads::mickey_folder()?;
-        if !bring::ask(&offer.offer, who, size, &folder) {
+        let asked = size > bring::ask_over();
+        if asked && !bring::ask(&offer.offer, who, size, &self.folder) {
             println!(
                 "mickey: {:.1} GB of files offered, not brought",
                 size as f64 / 1e9
             );
             return Ok(None);
         }
-        // Only Mickey's own leftovers go, never what the owner brought.
-        crate::transfer::cleanup::remove_abandoned(&folder, std::time::SystemTime::now());
-        Ok(Some(folder))
+        crate::fs::downloads::make(&self.folder)?;
+        // Only Mickey's own leftovers go, never what the owner brought. It
+        // walks the whole folder: once a run, and before each big transfer,
+        // not before every small copy.
+        let first = !self.swept.swap(true, std::sync::atomic::Ordering::Relaxed);
+        if first || asked {
+            crate::transfer::cleanup::remove_abandoned(&self.folder, std::time::SystemTime::now());
+        }
+        Ok(Some(self.folder.clone()))
     }
 
     /// A transfer link to the PC that made `offer`: only a paired one, and
@@ -333,7 +333,7 @@ mod tests {
             Arc::new(Offers::default()),
             Arc::new(Identity::generate().unwrap()),
             port,
-            dir.join("received"),
+            dir.join("Downloads/Mickey"),
             Arc::new(std::sync::Mutex::new(peers)),
             Keeper::in_memory(copied),
         ))
@@ -472,7 +472,11 @@ mod tests {
             })
             .expect("the files reach the clipboard");
         assert_eq!(pasted.len(), 1);
-        assert!(pasted[0].starts_with(scratch.0.join("b/received")));
+        assert_eq!(
+            pasted[0],
+            scratch.0.join("b/Downloads/Mickey/fotos"),
+            "straight in Downloads/Mickey, where the owner finds it"
+        );
         assert_eq!(std::fs::read(pasted[0].join("a.txt")).unwrap(), b"hello");
         // Copied again on B, the folder says it came from A, and A never
         // fetches it back (#424): its clipboard keeps what it holds.
@@ -482,7 +486,7 @@ mod tests {
         // Refused before any thread starts: nothing to wait for.
         a.fetch(back, listen.ip());
         assert_eq!(a.keeper.read(), Some(Content::Text("A's own".into())));
-        assert!(!scratch.0.join("a/received").exists(), "nothing fetched");
+        assert!(!scratch.0.join("a/Downloads").exists(), "nothing fetched");
     }
 
     #[test]
@@ -527,11 +531,10 @@ mod tests {
         let scratch = Scratch::new("unpaired-offer");
         let b = pc(&scratch, "b", 1, None, None);
         // Refused before any thread starts: nothing to wait for.
-        b.fetch(
-            crate::transfer::file_offer::example(None),
-            "127.0.0.1".parse().unwrap(),
-        );
-        assert!(!scratch.0.join("b/received").exists(), "no folder");
-        assert!(b.fetches.waiting().is_empty(), "nothing kept");
+        let offer = crate::transfer::file_offer::example(None);
+        let key = (offer.key, offer.offer.id);
+        b.fetch(offer, "127.0.0.1".parse().unwrap());
+        assert!(!scratch.0.join("b/Downloads").exists(), "no folder");
+        assert!(matches!(b.fetches.begin(key), Begin::Start), "nothing kept");
     }
 }

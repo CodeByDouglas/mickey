@@ -8,7 +8,6 @@ use crate::control::{self, Control, Order, Request, Status};
 use crate::edges;
 use crate::focus::{Action, Focus, FocusMachine};
 use crate::input::Input;
-use crate::input::emit;
 use crate::input::event::InputEvent;
 use crate::input::hotkey::Hotkey;
 use crate::input::record::{Heard, Recording};
@@ -729,6 +728,10 @@ pub fn run(
                 }
             }
             Action::Ungrab => {
+                #[cfg(windows)]
+                if let Some(grab) = grabbed.as_mut() {
+                    grab.landing = home_at;
+                }
                 grabbed = None;
                 if let Focus::Remote(index) = left {
                     report_latency(&peers[index]);
@@ -1144,8 +1147,12 @@ pub fn run(
             println!("{}", mickey_config::i18n::t("messages.quitting"));
             return Ok(());
         }
+        // On Windows the hook thread places it as it lets the mouse go
+        // (`Grabbed::landing`): placed from here, motion swallowed before
+        // could land after it and pull the cursor back (#554).
+        #[cfg(not(windows))]
         if let Some((x, y)) = home_at
-            && let Err(err) = emit::place(x, y)
+            && let Err(err) = crate::input::emit::place(x, y)
         {
             eprintln!(
                 "{}",
