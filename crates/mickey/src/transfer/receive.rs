@@ -759,8 +759,11 @@ mod tests {
             left_out: Vec::new(),
         };
         // Sends a.bin's bytes, then says it changed meanwhile, then hangs
-        // up before b.bin.
+        // up before b.bin. Both fetches are read first (`asking` sends them
+        // at once): one left unread would reset the connection, which on
+        // Windows throws away bytes still on their way.
         let sender = thread::spawn(move || {
+            serving.recv_bulk().unwrap();
             serving.recv_bulk().unwrap();
             let send = |link: &mut Link, message| link.send_bulk(&wire::encode(&message)).unwrap();
             send(&mut serving, Message::File { index: 0, size: 4 });
