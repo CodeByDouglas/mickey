@@ -22,6 +22,7 @@ pub fn start() -> Result<(), String> {
     imp::start()
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn run(program: impl AsRef<std::ffi::OsStr>, args: &[&str]) -> Result<(), String> {
     let program = program.as_ref();
     let shown = std::path::Path::new(program).display().to_string();
@@ -357,6 +358,21 @@ mod imp {
             // `..` is resolved before comparing.
             assert!(!super::in_program_files(&root.join("..\\Users")));
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod imp {
+    pub fn set(_on: bool) -> Result<(), String> {
+        Err("autostart on macOS is not implemented yet".into())
+    }
+
+    pub fn is_on() -> bool {
+        false
+    }
+
+    pub fn start() -> Result<(), String> {
+        Err("starting Mickey as a macOS LaunchAgent is not implemented yet".into())
     }
 }
 

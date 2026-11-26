@@ -11,6 +11,8 @@ pub fn this_pc() -> Result<Vec<Monitor>, String> {
     #[cfg(windows)]
     return crate::platform::windows::monitors()
         .map_err(|err| format!("cannot list monitors: {err}"));
+    #[cfg(target_os = "macos")]
+    return Err("monitor listing on macOS is not implemented yet".into());
     #[cfg(target_os = "linux")]
     {
         use crate::desktop::Session;
@@ -121,7 +123,7 @@ pub fn first_found(
 pub fn follows_changes() -> bool {
     #[cfg(target_os = "linux")]
     return crate::desktop::session() != crate::desktop::Session::Portal;
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     return true;
 }
 

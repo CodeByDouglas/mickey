@@ -942,7 +942,6 @@ pub fn run(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        drop(act);
         // At once, not after a restart: every PC no longer trusted (the one
         // forgotten, and those it introduced) is dropped and listed as never
         // paired, so Connect pairs it again with a code instead of saying it
