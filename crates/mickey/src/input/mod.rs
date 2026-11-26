@@ -10,6 +10,9 @@ pub mod held;
 pub mod hotkey;
 #[cfg_attr(not(windows), allow(dead_code))]
 pub mod keymap;
+// Used by the macOS target and source backends in the follow-up PRs (#423).
+#[allow(dead_code)]
+pub mod keymap_macos;
 pub mod record;
 #[cfg(target_os = "linux")]
 pub mod touchpad;
