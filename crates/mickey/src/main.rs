@@ -64,9 +64,17 @@ fn main() {
         })
         .collect::<Result<Vec<String>, String>>()
         .and_then(|args| cli::parse(&args))
-        .and_then(run::run);
+        .and_then(dispatch);
     if let Err(err) = result {
         eprintln!("mickey: {err}");
         std::process::exit(1);
     }
+}
+
+fn dispatch(command: cli::Command) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if matches!(command, cli::Command::Run | cli::Command::Source { .. }) {
+        return platform::macos_tray::run_with_app(move || run::run(command));
+    }
+    run::run(command)
 }
