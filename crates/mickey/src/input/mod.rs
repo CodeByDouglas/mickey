@@ -278,7 +278,7 @@ mod macos {
     }
 
     pub fn cursor_now() -> Option<(i32, i32)> {
-        None
+        crate::platform::macos::cursor_pos()
     }
 
     impl Input {

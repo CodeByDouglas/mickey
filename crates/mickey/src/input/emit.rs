@@ -40,33 +40,215 @@ impl Emitter {
 }
 
 #[cfg(target_os = "macos")]
-pub struct Emitter;
+pub struct Emitter {
+    /// Active modifier flags (`CGEventFlags`), updated on modifier presses so
+    /// synthetic keys and clicks carry Shift/Control/Option/Command.
+    modifiers: u64,
+    /// Bitmask of currently pressed mouse buttons (bit 0 = left, 1 = right,
+    /// 2 = middle, 3 = X1, 4 = X2) so motion emits drag events while held.
+    held_buttons: u8,
+    /// Multi-click state so double- and triple-clicks work natively on macOS.
+    last_click: Option<(
+        crate::input::keymap::MouseButton,
+        std::time::Instant,
+        (i32, i32),
+        i64,
+    )>,
+    /// Sub-pixel scroll remainders per axis (`[vertical, horizontal]`), in
+    /// hi-res wheel units (120 per notch).
+    scroll_rem: [i32; 2],
+    /// Cached display bounds, refreshed periodically so per-event mouse motion
+    /// never allocates or queries CoreGraphics's display list at 1000 Hz.
+    displays: Vec<crate::monitors::Monitor>,
+    displays_at: std::time::Instant,
+}
 
 #[cfg(target_os = "macos")]
 impl Emitter {
     pub fn new() -> Result<Emitter, String> {
-        Err("macOS input emission is not implemented yet".into())
+        if !crate::platform::macos::accessibility_trusted() {
+            return Err(
+                "macOS Accessibility permission is required to receive keyboard and mouse input; \
+                 enable Mickey (or your terminal) in System Settings > Privacy & Security > Accessibility"
+                    .into(),
+            );
+        }
+        let displays = crate::platform::macos::monitors().unwrap_or_default();
+        Ok(Emitter {
+            modifiers: 0,
+            held_buttons: 0,
+            last_click: None,
+            scroll_rem: [0; 2],
+            displays,
+            displays_at: std::time::Instant::now(),
+        })
     }
 
-    pub fn emit(&mut self, _event: InputEvent) -> io::Result<()> {
-        Err(io::Error::other(
-            "macOS input emission is not implemented yet",
-        ))
+    pub fn emit(&mut self, event: InputEvent) -> io::Result<()> {
+        use crate::input::{keymap, keymap_macos};
+        use crate::platform::macos;
+        const PX_PER_NOTCH: i32 = 36;
+        const NOTCH: i32 = 120;
+        const DISPLAY_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+
+        match event {
+            InputEvent::Key { code, pressed } => {
+                self.update_modifier(code, pressed);
+                match keymap_macos::macos_keycode(code) {
+                    Some(vk) => macos::send_key(vk, pressed, self.modifiers),
+                    None => Ok(()),
+                }
+            }
+            InputEvent::Button { code, pressed } => match keymap::mouse_button(code) {
+                Some(button) => {
+                    let bit = button_bit(button);
+                    if pressed {
+                        self.held_buttons |= bit;
+                    } else {
+                        self.held_buttons &= !bit;
+                    }
+                    let (x, y) = macos::cursor_pos().unwrap_or((0, 0));
+                    let click_state = self.next_click_state(button, pressed, (x, y));
+                    macos::send_button(x, y, button, pressed, click_state, self.modifiers)
+                }
+                None => Ok(()),
+            },
+            InputEvent::Motion { dx, dy } => {
+                if dx == 0 && dy == 0 {
+                    return Ok(());
+                }
+                if self.displays_at.elapsed() >= DISPLAY_TTL {
+                    if let Ok(found) = macos::monitors() {
+                        self.displays = found;
+                    }
+                    self.displays_at = std::time::Instant::now();
+                }
+                let (cx, cy) = macos::cursor_pos().unwrap_or((0, 0));
+                let (nx, ny) = clamp_to_monitors(cx + dx, cy + dy, &self.displays);
+                macos::move_mouse(nx, ny, dx, dy, self.held_buttons, self.modifiers)
+            }
+            InputEvent::Scroll {
+                vertical,
+                horizontal,
+            } => {
+                let mut px = [0i32; 2];
+                for (axis, amount) in [vertical, horizontal].into_iter().enumerate() {
+                    if amount == 0 {
+                        continue;
+                    }
+                    let scaled = amount.saturating_mul(PX_PER_NOTCH) + self.scroll_rem[axis];
+                    px[axis] = scaled / NOTCH;
+                    self.scroll_rem[axis] = scaled % NOTCH;
+                }
+                macos::scroll(px[0], px[1], self.modifiers)
+            }
+        }
     }
+
+    fn update_modifier(&mut self, evdev_code: u16, pressed: bool) {
+        use crate::platform::macos;
+        if evdev_code == 58 {
+            if pressed {
+                self.modifiers ^= macos::FLAG_ALPHA_SHIFT;
+            }
+            return;
+        }
+        let flag = match evdev_code {
+            42 | 54 => macos::FLAG_SHIFT,
+            29 | 97 => macos::FLAG_CONTROL,
+            56 | 100 => macos::FLAG_ALTERNATE,
+            125 | 126 => macos::FLAG_COMMAND,
+            _ => return,
+        };
+        if pressed {
+            self.modifiers |= flag;
+        } else {
+            self.modifiers &= !flag;
+        }
+    }
+
+    fn next_click_state(
+        &mut self,
+        button: crate::input::keymap::MouseButton,
+        pressed: bool,
+        pos: (i32, i32),
+    ) -> i64 {
+        const DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+        const MAX_DRIFT: i32 = 4;
+        let now = std::time::Instant::now();
+        if pressed {
+            let count = match self.last_click {
+                Some((prev_btn, prev_time, (px, py), prev_count))
+                    if prev_btn == button
+                        && now.duration_since(prev_time) <= DOUBLE_CLICK_WINDOW
+                        && (pos.0 - px).abs() <= MAX_DRIFT
+                        && (pos.1 - py).abs() <= MAX_DRIFT =>
+                {
+                    (prev_count % 3) + 1
+                }
+                _ => 1,
+            };
+            self.last_click = Some((button, now, pos, count));
+            count
+        } else {
+            self.last_click
+                .filter(|(prev_btn, ..)| *prev_btn == button)
+                .map_or(1, |(.., count)| count)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn button_bit(button: crate::input::keymap::MouseButton) -> u8 {
+    use crate::input::keymap::MouseButton;
+    match button {
+        MouseButton::Left => 1 << 0,
+        MouseButton::Right => 1 << 1,
+        MouseButton::Middle => 1 << 2,
+        MouseButton::X1 => 1 << 3,
+        MouseButton::X2 => 1 << 4,
+    }
+}
+
+/// Clamps `(x, y)` to the nearest point inside any active monitor, so relative
+/// moves never push the synthetic cursor outside the display layout.
+#[cfg(any(target_os = "macos", test))]
+fn clamp_to_monitors(x: i32, y: i32, monitors: &[crate::monitors::Monitor]) -> (i32, i32) {
+    if monitors.is_empty() {
+        return (x, y);
+    }
+    let mut best = (x, y);
+    let mut best_dist = i64::MAX;
+    for m in monitors {
+        if m.width <= 0 || m.height <= 0 {
+            continue;
+        }
+        let cx = x.clamp(m.x, m.x + m.width - 1);
+        let cy = y.clamp(m.y, m.y + m.height - 1);
+        if cx == x && cy == y {
+            return (x, y);
+        }
+        let dx = i64::from(x - cx);
+        let dy = i64::from(y - cy);
+        let dist = dx * dx + dy * dy;
+        if dist < best_dist {
+            best_dist = dist;
+            best = (cx, cy);
+        }
+    }
+    best
 }
 
 /// Puts this PC's cursor at `x, y` of its desktop.
 #[cfg(target_os = "macos")]
-pub fn place(_x: i32, _y: i32) -> io::Result<()> {
-    Err(io::Error::other(
-        "macOS cursor placement is not implemented yet",
-    ))
+pub fn place(x: i32, y: i32) -> io::Result<()> {
+    crate::platform::macos::set_cursor_pos(x, y)
 }
 
 /// Where this PC's cursor is, in the coordinates of its monitors.
 #[cfg(target_os = "macos")]
 pub fn cursor() -> Option<(i32, i32)> {
-    None
+    crate::platform::macos::cursor_pos()
 }
 
 /// Where the cursor was before `park`, to put it back on `unpark`.
@@ -427,5 +609,31 @@ mod park_tests {
         assert_eq!(corner(&[left, right]), Some((3199, 919)));
         assert_eq!(corner(&[left]), Some((1919, 1079)));
         assert_eq!(corner(&[]), None);
+    }
+
+    #[test]
+    fn clamping_keeps_points_inside_the_display_layout() {
+        let left = Monitor {
+            x: 0,
+            y: 0,
+            width: 1470,
+            height: 956,
+        };
+        let right = Monitor {
+            x: 1470,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        assert_eq!(
+            super::clamp_to_monitors(500, 300, &[left, right]),
+            (500, 300)
+        );
+        assert_eq!(super::clamp_to_monitors(-10, 300, &[left, right]), (0, 300));
+        assert_eq!(
+            super::clamp_to_monitors(4000, 2000, &[left, right]),
+            (3389, 1079)
+        );
+        assert_eq!(super::clamp_to_monitors(50, 50, &[]), (50, 50));
     }
 }
