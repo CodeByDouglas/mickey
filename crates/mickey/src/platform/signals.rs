@@ -10,29 +10,14 @@
 
 use std::io;
 
-/// `sigset_t` on 64-bit glibc: 1024 bits.
-#[repr(C)]
-struct SigSet([u64; 16]);
-
-const SIG_BLOCK: i32 = 0;
-const SIGHUP: i32 = 1;
-const SIGINT: i32 = 2;
-const SIGTERM: i32 = 15;
-
-unsafe extern "C" {
-    fn sigemptyset(set: *mut SigSet) -> i32;
-    fn sigaddset(set: *mut SigSet, signal: i32) -> i32;
-    fn pthread_sigmask(how: i32, set: *const SigSet, old: *mut SigSet) -> i32;
-    fn sigwait(set: *const SigSet, signal: *mut i32) -> i32;
-}
-
-fn stop_signals() -> SigSet {
-    let mut set = SigSet([0; 16]);
-    // SAFETY: `set` is a valid, writable sigset_t-sized buffer.
+fn stop_signals() -> libc::sigset_t {
+    // SAFETY: an all-zero `sigset_t` is a valid value before `sigemptyset`.
+    let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `set` is a valid, writable `sigset_t`.
     unsafe {
-        sigemptyset(&mut set);
-        for signal in [SIGHUP, SIGINT, SIGTERM] {
-            sigaddset(&mut set, signal);
+        libc::sigemptyset(&mut set);
+        for signal in [libc::SIGHUP, libc::SIGINT, libc::SIGTERM] {
+            libc::sigaddset(&mut set, signal);
         }
     }
     set
@@ -47,7 +32,7 @@ fn stop_signals() -> SigSet {
 pub fn on_stop(cleanup: fn()) -> io::Result<()> {
     let set = stop_signals();
     // SAFETY: `set` is initialised above; the old mask is not wanted.
-    let error = unsafe { pthread_sigmask(SIG_BLOCK, &set, std::ptr::null_mut()) };
+    let error = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
     if error != 0 {
         return Err(io::Error::from_raw_os_error(error));
     }
@@ -58,7 +43,7 @@ pub fn on_stop(cleanup: fn()) -> io::Result<()> {
             // SAFETY: `set` lives in this closure; `signal` is a valid
             // out-pointer. sigwait returns the signal instead of running a
             // handler.
-            if unsafe { sigwait(&set, &mut signal) } == 0 {
+            if unsafe { libc::sigwait(&set, &mut signal) } == 0 {
                 println!("mickey: signal {signal}, ending");
                 cleanup();
                 std::process::exit(128 + signal);

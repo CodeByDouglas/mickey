@@ -12,13 +12,13 @@ pub mod linux;
 pub mod listener;
 #[cfg(windows)]
 pub mod log_file;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub mod netif;
 #[cfg(windows)]
 pub mod output;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod signals;
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 pub mod space;
 #[cfg(windows)]
 pub mod tray;

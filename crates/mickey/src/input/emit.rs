@@ -39,6 +39,36 @@ impl Emitter {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub struct Emitter;
+
+#[cfg(target_os = "macos")]
+impl Emitter {
+    pub fn new() -> Result<Emitter, String> {
+        Err("macOS input emission is not implemented yet".into())
+    }
+
+    pub fn emit(&mut self, _event: InputEvent) -> io::Result<()> {
+        Err(io::Error::other(
+            "macOS input emission is not implemented yet",
+        ))
+    }
+}
+
+/// Puts this PC's cursor at `x, y` of its desktop.
+#[cfg(target_os = "macos")]
+pub fn place(_x: i32, _y: i32) -> io::Result<()> {
+    Err(io::Error::other(
+        "macOS cursor placement is not implemented yet",
+    ))
+}
+
+/// Where this PC's cursor is, in the coordinates of its monitors.
+#[cfg(target_os = "macos")]
+pub fn cursor() -> Option<(i32, i32)> {
+    None
+}
+
 /// Where the cursor was before `park`, to put it back on `unpark`.
 static PARKED: Parking = Parking(std::sync::Mutex::new(None));
 

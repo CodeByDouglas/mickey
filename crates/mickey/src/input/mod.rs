@@ -28,6 +28,10 @@ use std::sync::mpsc::Sender;
 pub use linux::Input;
 #[cfg(target_os = "linux")]
 pub use linux::cursor_now;
+#[cfg(target_os = "macos")]
+pub use macos::Input;
+#[cfg(target_os = "macos")]
+pub use macos::cursor_now;
 #[cfg(windows)]
 pub use windows::Input;
 #[cfg(windows)]
@@ -255,6 +259,48 @@ mod windows {
                 vertical,
                 horizontal,
             }),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::*;
+    use std::marker::PhantomData;
+
+    pub struct Input;
+
+    pub struct Grabbed<'a> {
+        _input: PhantomData<&'a Input>,
+    }
+
+    pub fn cursor_now() -> Option<(i32, i32)> {
+        None
+    }
+
+    impl Input {
+        pub fn open(_touchpad: &config::Touchpad) -> Result<Input, String> {
+            Err("macOS input capture is not implemented yet".into())
+        }
+
+        pub fn start<T: From<InputEvent> + Send + 'static>(
+            &self,
+            _events: Sender<T>,
+            _touchpad: &config::Touchpad,
+        ) -> Result<(), String> {
+            Err("macOS input capture is not implemented yet".into())
+        }
+
+        pub fn any_key_down(&self) -> bool {
+            false
+        }
+
+        pub fn button_down(&self) -> bool {
+            false
+        }
+
+        pub fn grab(&self) -> Result<Grabbed<'_>, String> {
+            Err("macOS input grab is not implemented yet".into())
         }
     }
 }
