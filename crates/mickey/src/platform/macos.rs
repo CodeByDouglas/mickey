@@ -35,12 +35,6 @@ const CG_EVENT_FIELD_SOURCE_USER_DATA: u32 = 42;
 const CG_SCROLL_EVENT_UNIT_PIXEL: u32 = 0;
 const CG_HID_EVENT_TAP: u32 = 0;
 
-pub const FLAG_ALPHA_SHIFT: u64 = 0x0001_0000;
-pub const FLAG_SHIFT: u64 = 0x0002_0000;
-pub const FLAG_CONTROL: u64 = 0x0004_0000;
-pub const FLAG_ALTERNATE: u64 = 0x0008_0000;
-pub const FLAG_COMMAND: u64 = 0x0010_0000;
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct CGPoint {
@@ -69,7 +63,8 @@ unsafe extern "C" {
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
-    fn AXIsProcessTrusted() -> bool;
+    /// CoreFoundation `Boolean` (`unsigned char`), not Rust `bool`.
+    fn AXIsProcessTrusted() -> u8;
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -147,7 +142,7 @@ impl Drop for CfEvent {
 /// requires to inject keyboard and mouse events into other apps.
 pub fn accessibility_trusted() -> bool {
     // SAFETY: takes no arguments; queries TCC for this process.
-    unsafe { AXIsProcessTrusted() }
+    unsafe { AXIsProcessTrusted() != 0 }
 }
 
 /// Every active display's rectangle in global logical points (the same
@@ -234,14 +229,30 @@ pub fn move_mouse(
     held_buttons: u8,
     modifiers: u64,
 ) -> io::Result<()> {
-    let (kind, button) = if held_buttons & 0b0001 != 0 {
-        (CG_EVENT_LEFT_MOUSE_DRAGGED, CG_MOUSE_BUTTON_LEFT)
+    let (kind, button, other_button_number) = if held_buttons & 0b0001 != 0 {
+        (CG_EVENT_LEFT_MOUSE_DRAGGED, CG_MOUSE_BUTTON_LEFT, None)
     } else if held_buttons & 0b0010 != 0 {
-        (CG_EVENT_RIGHT_MOUSE_DRAGGED, CG_MOUSE_BUTTON_RIGHT)
-    } else if held_buttons != 0 {
-        (CG_EVENT_OTHER_MOUSE_DRAGGED, CG_MOUSE_BUTTON_CENTER)
+        (CG_EVENT_RIGHT_MOUSE_DRAGGED, CG_MOUSE_BUTTON_RIGHT, None)
+    } else if held_buttons & 0b0100 != 0 {
+        (
+            CG_EVENT_OTHER_MOUSE_DRAGGED,
+            CG_MOUSE_BUTTON_CENTER,
+            Some(2),
+        )
+    } else if held_buttons & 0b1000 != 0 {
+        (
+            CG_EVENT_OTHER_MOUSE_DRAGGED,
+            CG_MOUSE_BUTTON_CENTER,
+            Some(3),
+        )
+    } else if held_buttons & 0b1_0000 != 0 {
+        (
+            CG_EVENT_OTHER_MOUSE_DRAGGED,
+            CG_MOUSE_BUTTON_CENTER,
+            Some(4),
+        )
     } else {
-        (CG_EVENT_MOUSE_MOVED, CG_MOUSE_BUTTON_LEFT)
+        (CG_EVENT_MOUSE_MOVED, CG_MOUSE_BUTTON_LEFT, None)
     };
     let pos = CGPoint {
         x: f64::from(x),
@@ -250,6 +261,9 @@ pub fn move_mouse(
     // SAFETY: null event source and plain value arguments.
     let event =
         CfEvent::new(unsafe { CGEventCreateMouseEvent(std::ptr::null(), kind, pos, button) })?;
+    if let Some(num) = other_button_number {
+        event.set_int(CG_EVENT_FIELD_MOUSE_BUTTON_NUMBER, num);
+    }
     event.set_int(CG_EVENT_FIELD_MOUSE_DELTA_X, i64::from(dx));
     event.set_int(CG_EVENT_FIELD_MOUSE_DELTA_Y, i64::from(dy));
     event.set_flags(modifiers);

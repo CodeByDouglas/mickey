@@ -39,11 +39,86 @@ impl Emitter {
     }
 }
 
+/// Tracks left and right modifier keys separately so holding both sides and
+/// releasing one keeps the corresponding `CGEventFlags` bit set until both
+/// are released.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Default)]
+struct MacModifiers {
+    /// Bit 0: LShift, 1: RShift, 2: LCtrl, 3: RCtrl, 4: LAlt, 5: RAlt,
+    /// 6: LMeta, 7: RMeta, 8: CapsLock.
+    held: u16,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl MacModifiers {
+    const LSHIFT: u16 = 1 << 0;
+    const RSHIFT: u16 = 1 << 1;
+    const LCTRL: u16 = 1 << 2;
+    const RCTRL: u16 = 1 << 3;
+    const LALT: u16 = 1 << 4;
+    const RALT: u16 = 1 << 5;
+    const LMETA: u16 = 1 << 6;
+    const RMETA: u16 = 1 << 7;
+    const CAPSLOCK: u16 = 1 << 8;
+
+    fn update(&mut self, evdev_code: u16, pressed: bool) {
+        if evdev_code == 58 {
+            if pressed {
+                self.held ^= Self::CAPSLOCK;
+            }
+            return;
+        }
+        let bit = match evdev_code {
+            42 => Self::LSHIFT,
+            54 => Self::RSHIFT,
+            29 => Self::LCTRL,
+            97 => Self::RCTRL,
+            56 => Self::LALT,
+            100 => Self::RALT,
+            125 => Self::LMETA,
+            126 => Self::RMETA,
+            _ => return,
+        };
+        if pressed {
+            self.held |= bit;
+        } else {
+            self.held &= !bit;
+        }
+    }
+
+    fn flags(&self) -> u64 {
+        const FLAG_ALPHA_SHIFT: u64 = 0x0001_0000;
+        const FLAG_SHIFT: u64 = 0x0002_0000;
+        const FLAG_CONTROL: u64 = 0x0004_0000;
+        const FLAG_ALTERNATE: u64 = 0x0008_0000;
+        const FLAG_COMMAND: u64 = 0x0010_0000;
+
+        let mut flags = 0u64;
+        if self.held & Self::CAPSLOCK != 0 {
+            flags |= FLAG_ALPHA_SHIFT;
+        }
+        if self.held & (Self::LSHIFT | Self::RSHIFT) != 0 {
+            flags |= FLAG_SHIFT;
+        }
+        if self.held & (Self::LCTRL | Self::RCTRL) != 0 {
+            flags |= FLAG_CONTROL;
+        }
+        if self.held & (Self::LALT | Self::RALT) != 0 {
+            flags |= FLAG_ALTERNATE;
+        }
+        if self.held & (Self::LMETA | Self::RMETA) != 0 {
+            flags |= FLAG_COMMAND;
+        }
+        flags
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub struct Emitter {
-    /// Active modifier flags (`CGEventFlags`), updated on modifier presses so
-    /// synthetic keys and clicks carry Shift/Control/Option/Command.
-    modifiers: u64,
+    /// Active modifier keys, tracked left/right independently so synthetic
+    /// keys and clicks carry Shift/Control/Option/Command accurately.
+    modifiers: MacModifiers,
     /// Bitmask of currently pressed mouse buttons (bit 0 = left, 1 = right,
     /// 2 = middle, 3 = X1, 4 = X2) so motion emits drag events while held.
     held_buttons: u8,
@@ -75,7 +150,7 @@ impl Emitter {
         }
         let displays = crate::platform::macos::monitors().unwrap_or_default();
         Ok(Emitter {
-            modifiers: 0,
+            modifiers: MacModifiers::default(),
             held_buttons: 0,
             last_click: None,
             scroll_rem: [0; 2],
@@ -93,9 +168,9 @@ impl Emitter {
 
         match event {
             InputEvent::Key { code, pressed } => {
-                self.update_modifier(code, pressed);
+                self.modifiers.update(code, pressed);
                 match keymap_macos::macos_keycode(code) {
-                    Some(vk) => macos::send_key(vk, pressed, self.modifiers),
+                    Some(vk) => macos::send_key(vk, pressed, self.modifiers.flags()),
                     None => Ok(()),
                 }
             }
@@ -109,7 +184,7 @@ impl Emitter {
                     }
                     let (x, y) = macos::cursor_pos().unwrap_or((0, 0));
                     let click_state = self.next_click_state(button, pressed, (x, y));
-                    macos::send_button(x, y, button, pressed, click_state, self.modifiers)
+                    macos::send_button(x, y, button, pressed, click_state, self.modifiers.flags())
                 }
                 None => Ok(()),
             },
@@ -124,8 +199,9 @@ impl Emitter {
                     self.displays_at = std::time::Instant::now();
                 }
                 let (cx, cy) = macos::cursor_pos().unwrap_or((0, 0));
-                let (nx, ny) = clamp_to_monitors(cx + dx, cy + dy, &self.displays);
-                macos::move_mouse(nx, ny, dx, dy, self.held_buttons, self.modifiers)
+                let (nx, ny) =
+                    clamp_to_monitors(cx.saturating_add(dx), cy.saturating_add(dy), &self.displays);
+                macos::move_mouse(nx, ny, dx, dy, self.held_buttons, self.modifiers.flags())
             }
             InputEvent::Scroll {
                 vertical,
@@ -136,34 +212,14 @@ impl Emitter {
                     if amount == 0 {
                         continue;
                     }
-                    let scaled = amount.saturating_mul(PX_PER_NOTCH) + self.scroll_rem[axis];
+                    let scaled = amount
+                        .saturating_mul(PX_PER_NOTCH)
+                        .saturating_add(self.scroll_rem[axis]);
                     px[axis] = scaled / NOTCH;
                     self.scroll_rem[axis] = scaled % NOTCH;
                 }
-                macos::scroll(px[0], px[1], self.modifiers)
+                macos::scroll(px[0], px[1], self.modifiers.flags())
             }
-        }
-    }
-
-    fn update_modifier(&mut self, evdev_code: u16, pressed: bool) {
-        use crate::platform::macos;
-        if evdev_code == 58 {
-            if pressed {
-                self.modifiers ^= macos::FLAG_ALPHA_SHIFT;
-            }
-            return;
-        }
-        let flag = match evdev_code {
-            42 | 54 => macos::FLAG_SHIFT,
-            29 | 97 => macos::FLAG_CONTROL,
-            56 | 100 => macos::FLAG_ALTERNATE,
-            125 | 126 => macos::FLAG_COMMAND,
-            _ => return,
-        };
-        if pressed {
-            self.modifiers |= flag;
-        } else {
-            self.modifiers &= !flag;
         }
     }
 
@@ -239,10 +295,12 @@ fn clamp_to_monitors(x: i32, y: i32, monitors: &[crate::monitors::Monitor]) -> (
     best
 }
 
-/// Puts this PC's cursor at `x, y` of its desktop.
+/// Puts this PC's cursor at `x, y` of its desktop, clamped to active displays.
 #[cfg(target_os = "macos")]
 pub fn place(x: i32, y: i32) -> io::Result<()> {
-    crate::platform::macos::set_cursor_pos(x, y)
+    let displays = crate::platform::macos::monitors().unwrap_or_default();
+    let (nx, ny) = clamp_to_monitors(x, y, &displays);
+    crate::platform::macos::set_cursor_pos(nx, ny)
 }
 
 /// Where this PC's cursor is, in the coordinates of its monitors.
@@ -635,5 +693,31 @@ mod park_tests {
             (3389, 1079)
         );
         assert_eq!(super::clamp_to_monitors(50, 50, &[]), (50, 50));
+    }
+
+    #[test]
+    fn releasing_one_modifier_side_keeps_the_other_active() {
+        let mut mods = super::MacModifiers::default();
+        // Hold both Left Shift (42) and Right Shift (54), release Left Shift.
+        mods.update(42, true);
+        mods.update(54, true);
+        mods.update(42, false);
+        assert_ne!(mods.flags() & 0x0002_0000, 0, "Right Shift still held");
+        mods.update(54, false);
+        assert_eq!(mods.flags() & 0x0002_0000, 0, "both Shifts released");
+
+        // Same check for Ctrl (29/97), Option (56/100), Command (125/126).
+        for (left, right, mask) in [
+            (29, 97, 0x0004_0000),
+            (56, 100, 0x0008_0000),
+            (125, 126, 0x0010_0000),
+        ] {
+            mods.update(left, true);
+            mods.update(right, true);
+            mods.update(right, false);
+            assert_ne!(mods.flags() & mask, 0);
+            mods.update(left, false);
+            assert_eq!(mods.flags() & mask, 0);
+        }
     }
 }
