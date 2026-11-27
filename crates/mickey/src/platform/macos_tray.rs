@@ -108,9 +108,14 @@ unsafe extern "C" {
     fn objc_msgSend();
 }
 
+#[repr(C)]
+struct DispatchQueue {
+    _p: [u8; 0],
+}
+
 #[link(name = "System")]
 unsafe extern "C" {
-    static mut _dispatch_main_q: c_void;
+    static _dispatch_main_q: DispatchQueue;
     fn dispatch_async_f(
         queue: *mut c_void,
         context: *mut c_void,
@@ -238,11 +243,18 @@ pub fn run_with_app(
         return work();
     }
 
+    /// Always wakes and stops `[NSApp run]`, even if `work()` panics.
+    struct StopAppOnDrop;
+    impl Drop for StopAppOnDrop {
+        fn drop(&mut self) {
+            dispatch_to_main(stop_app_callback);
+        }
+    }
+
     MAIN_LOOP_RUNNING.store(true, Ordering::Release);
     let worker = crate::threads::spawn("mickey main", move || {
-        let result = work();
-        dispatch_to_main(stop_app_callback);
-        result
+        let _stop = StopAppOnDrop;
+        work()
     });
 
     // SAFETY: `app` is the shared `NSApplication` on the main thread.
@@ -258,7 +270,11 @@ fn dispatch_to_main(work: unsafe extern "C" fn(*mut c_void)) {
     // SAFETY: `_dispatch_main_q` is libdispatch's static main queue; `work`
     // does not dereference the null context pointer.
     unsafe {
-        dispatch_async_f(&raw mut _dispatch_main_q, std::ptr::null_mut(), work);
+        dispatch_async_f(
+            (&raw const _dispatch_main_q).cast::<c_void>().cast_mut(),
+            std::ptr::null_mut(),
+            work,
+        );
     }
 }
 

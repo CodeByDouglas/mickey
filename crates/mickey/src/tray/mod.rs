@@ -2,7 +2,8 @@
 //! tooltip naming the PC in control, and a menu to move the keyboard, open
 //! the settings or quit. On Linux it is a StatusNotifierItem (Waybar's
 //! tray, KDE, GNOME with the AppIndicator extension), through `ksni`; on
-//! Windows an icon in the notification area (`platform::tray`).
+//! Windows an icon in the notification area (`platform::tray`); on macOS a
+//! Menu Bar item (`NSStatusItem`, `platform::macos_tray`).
 
 pub mod picture;
 

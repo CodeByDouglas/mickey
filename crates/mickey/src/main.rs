@@ -74,6 +74,12 @@ fn main() {
 fn dispatch(command: cli::Command) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     if matches!(command, cli::Command::Run | cli::Command::Source { .. }) {
+        // `mickey run` installs a `sigwait` cleanup thread on the worker; block
+        // stop signals on thread 0 first so the AppKit main loop inherits the
+        // mask and does not terminate before cleanup runs.
+        if matches!(command, cli::Command::Run) {
+            let _ = platform::signals::block_stop_signals();
+        }
         return platform::macos_tray::run_with_app(move || run::run(command));
     }
     run::run(command)
