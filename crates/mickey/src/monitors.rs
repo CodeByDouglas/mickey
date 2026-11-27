@@ -12,7 +12,8 @@ pub fn this_pc() -> Result<Vec<Monitor>, String> {
     return crate::platform::windows::monitors()
         .map_err(|err| format!("cannot list monitors: {err}"));
     #[cfg(target_os = "macos")]
-    return Err("monitor listing on macOS is not implemented yet".into());
+    return crate::platform::macos::monitors()
+        .map_err(|err| format!("cannot list monitors: {err}"));
     #[cfg(target_os = "linux")]
     {
         use crate::desktop::Session;

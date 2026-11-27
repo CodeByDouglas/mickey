@@ -23,6 +23,18 @@ fn stop_signals() -> libc::sigset_t {
     set
 }
 
+/// Blocks SIGTERM, SIGINT and SIGHUP on the calling thread so subsequent
+/// threads inherit the mask and only the `sigwait` thread receives them.
+pub fn block_stop_signals() -> io::Result<()> {
+    let set = stop_signals();
+    // SAFETY: `set` is initialised above; the old mask is not wanted.
+    let error = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
+    if error != 0 {
+        return Err(io::Error::from_raw_os_error(error));
+    }
+    Ok(())
+}
+
 /// From now on, SIGTERM, SIGINT and SIGHUP run `cleanup` on a thread of its
 /// own, then end the process as the signal would have (exit code 128 + the
 /// signal). Call it before starting other threads: they inherit the
@@ -30,12 +42,8 @@ fn stop_signals() -> libc::sigset_t {
 /// Mickey starts get the usual signals back (`std::process` resets the
 /// mask).
 pub fn on_stop(cleanup: fn()) -> io::Result<()> {
+    block_stop_signals()?;
     let set = stop_signals();
-    // SAFETY: `set` is initialised above; the old mask is not wanted.
-    let error = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
-    if error != 0 {
-        return Err(io::Error::from_raw_os_error(error));
-    }
     std::thread::Builder::new()
         .name("signals".into())
         .spawn(move || {
