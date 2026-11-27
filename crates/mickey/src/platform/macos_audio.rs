@@ -2,8 +2,8 @@
 //! for Apple Silicon (`aarch64-apple-darwin`).
 //!
 //! `AudioQueuePlayer` accepts Mickey's exact 48 kHz stereo 16-bit signed LE
-//! PCM frames with 4 x 5 ms buffers (20 ms play-ahead) and blocking
-//! backpressure so the jitter buffer stays paced.
+//! PCM frames with 4 x 5 ms queued buffers and blocking backpressure so the
+//! jitter buffer stays paced.
 
 use crate::audio::wire::{CHANNELS, PCM_BYTES, RATE};
 use std::ffi::c_void;
@@ -15,7 +15,8 @@ const K_AUDIO_FORMAT_LINEAR_PCM: u32 = u32::from_be_bytes(*b"lpcm");
 const K_PCM_FLAG_IS_SIGNED_INT: u32 = 1 << 2;
 const K_PCM_FLAG_IS_PACKED: u32 = 1 << 3;
 
-/// 4 x 5 ms = 20 ms play-ahead, matching Linux's `PLAY_AHEAD`.
+/// 4 x 5 ms queued buffers; total playback latency including AudioQueue and
+/// device buffering is not yet measured.
 const PLAY_BUFFERS: usize = 4;
 
 #[repr(C)]
@@ -90,12 +91,9 @@ pub struct AudioQueuePlayer {
     /// Boxed `Sender<BufferPtr>` passed as `user_data` to `AudioQueueNewOutput`,
     /// freed in `Drop` after `AudioQueueDispose` guarantees no more callbacks.
     callback_ctx: *mut Sender<BufferPtr>,
-    started: bool,
+    /// Number of initial buffers queued before starting playback (`0..=PLAY_BUFFERS`).
+    primed: usize,
 }
-
-// SAFETY: `AudioQueuePlayer` is owned by a single audio-out thread; its raw
-// `AudioQueueRef` is safe to dispose from that thread.
-unsafe impl Send for AudioQueuePlayer {}
 
 unsafe extern "C" fn queue_output_callback(
     user_data: *mut c_void,
@@ -169,7 +167,7 @@ impl AudioQueuePlayer {
             queue,
             free_rx,
             callback_ctx,
-            started: false,
+            primed: 0,
         })
     }
 
@@ -192,12 +190,14 @@ impl AudioQueuePlayer {
             if status != 0 {
                 return Err(format!("AudioQueueEnqueueBuffer failed ({status})"));
             }
-            if !self.started {
-                let status = AudioQueueStart(self.queue, std::ptr::null());
-                if status != 0 {
-                    return Err(format!("AudioQueueStart failed ({status})"));
+            if self.primed < PLAY_BUFFERS {
+                if self.primed + 1 == PLAY_BUFFERS {
+                    let status = AudioQueueStart(self.queue, std::ptr::null());
+                    if status != 0 {
+                        return Err(format!("AudioQueueStart failed ({status})"));
+                    }
                 }
-                self.started = true;
+                self.primed += 1;
             }
         }
         Ok(())
