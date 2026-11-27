@@ -1,6 +1,9 @@
-//! macOS audio playback and capture (placeholder until CoreAudio is added).
+//! macOS shared audio playback (`AudioQueue`) and capture placeholder
+//! (system audio capture via CoreAudio Process Taps follows in a separate PR).
 
+use super::at_volume;
 use crate::audio::wire::PCM_BYTES;
+use crate::platform::macos_audio::AudioQueuePlayer;
 
 pub struct Recorder;
 
@@ -14,14 +17,14 @@ impl Recorder {
     }
 }
 
-pub struct Player;
+pub struct Player(AudioQueuePlayer);
 
 impl Player {
-    pub fn open(_pc: &str) -> Result<Player, String> {
-        Err("shared audio playback on macOS is not implemented yet".into())
+    pub fn open(pc: &str) -> Result<Player, String> {
+        AudioQueuePlayer::open(pc).map(Player)
     }
 
-    pub fn write(&mut self, _pcm: &[u8; PCM_BYTES], _volume: f32) -> Result<(), String> {
-        Err("shared audio playback on macOS is not implemented yet".into())
+    pub fn write(&mut self, pcm: &[u8; PCM_BYTES], volume: f32) -> Result<(), String> {
+        self.0.write(&at_volume(pcm, volume))
     }
 }
