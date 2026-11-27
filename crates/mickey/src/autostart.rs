@@ -1,8 +1,9 @@
 //! Starting Mickey with the system: `mickey autostart on|off|status`, the
 //! switch behind "Start Mickey when this PC starts" in the settings. It
 //! turns on and off what the installers set up (packaging/): a systemd user
-//! service on Linux, a logon task on Windows. When Mickey was copied by
-//! hand, `on` makes the same thing, pointing at this `mickey`.
+//! service on Linux, a logon task on Windows, a LaunchAgent on macOS. When
+//! Mickey was copied by hand, `on` makes the same thing, pointing at this
+//! `mickey`.
 
 use std::process::Command;
 
@@ -411,9 +412,13 @@ fn launch_agent_plist(label: &str, exe: &str, log: &str) -> String {
 #[cfg(target_os = "macos")]
 mod imp {
     use super::{launch_agent_plist, run};
-    use std::path::PathBuf;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::path::{Path, PathBuf};
 
     const LABEL: &str = "io.github.eduardomg12.mickey";
+    const LAUNCHCTL: &str = "/bin/launchctl";
+    const ID: &str = "/usr/bin/id";
 
     fn home() -> Result<PathBuf, String> {
         std::env::var_os("HOME")
@@ -432,15 +437,40 @@ mod imp {
     }
 
     fn domain() -> Result<String, String> {
-        let output = std::process::Command::new("id")
+        let output = std::process::Command::new(ID)
             .arg("-u")
             .output()
-            .map_err(|err| format!("id: {err}"))?;
+            .map_err(|err| format!("{ID}: {err}"))?;
         if !output.status.success() {
             return Err("cannot determine current user id".into());
         }
         let uid = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(format!("gui/{uid}"))
+    }
+
+    /// Write the plist via a freshly created `0644` temp file and rename it
+    /// into place so we never follow a planted symlink and launchd never sees
+    /// a group-writable plist.
+    fn write_plist_atomic(path: &Path, content: &str) -> Result<(), String> {
+        let dir = path.parent().ok_or("bad plist path")?;
+        std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+        let random = crate::net::identity::random_bytes()?;
+        let tmp = dir.join(format!(".{LABEL}.{}.tmp", crate::hex::encode(&random[..8])));
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(&tmp)
+            .and_then(|mut file| file.write_all(content.as_bytes()));
+        if let Err(err) = written {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("cannot write {}: {err}", tmp.display()));
+        }
+        if let Err(err) = std::fs::rename(&tmp, path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("cannot install {}: {err}", path.display()));
+        }
+        Ok(())
     }
 
     pub fn set(on: bool) -> Result<(), String> {
@@ -450,42 +480,23 @@ mod imp {
         if on {
             let exe = std::env::current_exe().map_err(|err| err.to_string())?;
             let log = log_path()?;
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
-            }
             if let Some(dir) = log.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
             let plist = launch_agent_plist(LABEL, &exe.to_string_lossy(), &log.to_string_lossy());
-            std::fs::write(&path, plist).map_err(|err| err.to_string())?;
-            // `launchctl bootout` tears down a running job asynchronously;
-            // bootstrapping immediately before launchd finishes unloading it
-            // fails with `Bootstrap failed: 5: Input/output error`. Wait for
-            // the old job to disappear, then retry bootstrap briefly if needed.
-            if run("launchctl", &["bootout", &service]).is_ok() {
-                for _ in 0..30 {
-                    if run("launchctl", &["print", &service]).is_err() {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
+            write_plist_atomic(&path, &plist)?;
+            // Enabled only: it starts at the next login, not now, beside the
+            // Mickey already running (matching Linux and Windows).
+            if let Err(err) = run(LAUNCHCTL, &["enable", &service]) {
+                let _ = std::fs::remove_file(&path);
+                return Err(err);
             }
-            let plist_arg = path.to_string_lossy().into_owned();
-            let mut last_err = String::new();
-            for attempt in 0..5 {
-                match run("launchctl", &["bootstrap", &domain, &plist_arg]) {
-                    Ok(()) => return Ok(()),
-                    Err(err) => {
-                        last_err = err;
-                        if attempt < 4 {
-                            std::thread::sleep(std::time::Duration::from_millis(200));
-                        }
-                    }
-                }
-            }
-            Err(last_err)
+            Ok(())
         } else {
-            let _ = run("launchctl", &["bootout", &service]);
+            // Disabled only: removing the plist and marking the label disabled
+            // prevents the next login from starting Mickey without killing a
+            // running instance.
+            let _ = run(LAUNCHCTL, &["disable", &service]);
             match std::fs::remove_file(&path) {
                 Ok(()) => Ok(()),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -501,7 +512,9 @@ mod imp {
     pub fn start() -> Result<(), String> {
         let domain = domain()?;
         let service = format!("{domain}/{LABEL}");
-        if run("launchctl", &["kickstart", "-k", &service]).is_ok() {
+        // Without `-k`, `kickstart` starts a loaded agent only if it is not
+        // already running, matching `systemctl --user start`.
+        if run(LAUNCHCTL, &["kickstart", &service]).is_ok() {
             return Ok(());
         }
         let path = plist_path()?;
@@ -511,10 +524,37 @@ mod imp {
                     .into(),
             );
         }
-        run(
-            "launchctl",
-            &["bootstrap", &domain, &path.to_string_lossy()],
-        )
+        run(LAUNCHCTL, &["bootstrap", &domain, &path.to_string_lossy()])
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::write_plist_atomic;
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        #[test]
+        fn atomic_plist_write_replaces_symlink_and_is_not_group_writable() {
+            let random = crate::net::identity::random_bytes().unwrap();
+            let dir = std::env::temp_dir().join(format!(
+                "mickey-autostart-test-{}",
+                crate::hex::encode(&random[..8])
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let target = dir.join("decoy");
+            std::fs::write(&target, "untouched").unwrap();
+            let plist = dir.join("test.plist");
+            symlink(&target, &plist).unwrap();
+
+            write_plist_atomic(&plist, "<plist/>").unwrap();
+
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched");
+            assert_eq!(std::fs::read_to_string(&plist).unwrap(), "<plist/>");
+            let meta = std::fs::symlink_metadata(&plist).unwrap();
+            assert!(meta.file_type().is_file());
+            assert_eq!(meta.permissions().mode() & 0o022, 0);
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
 
